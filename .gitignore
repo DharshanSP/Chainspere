@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+cache/
+*.tsbuildinfo
+.env
+.env.local
+contracts/deployments.local.json
+contracts/src/artifacts/
+contracts/src/deployments/
+contracts/typechain-types/
+.vite/
+.DS_Store

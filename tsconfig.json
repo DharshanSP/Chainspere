@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "references": [
+    { "path": "./contracts" },
+    { "path": "./packages/shared" },
+    { "path": "./packages/crypto" },
+    { "path": "./packages/ipfs" },
+    { "path": "./packages/messaging" },
+    { "path": "./apps/signaling" },
+    { "path": "./apps/web" }
+  ],
+  "include": []
+}

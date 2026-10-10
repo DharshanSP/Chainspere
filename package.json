@@ -1,0 +1,32 @@
+{
+  "name": "chainsphere",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ChainSphere — decentralized, privacy-preserving messaging platform",
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @chainsphere/web dev",
+    "dev:signaling": "pnpm --filter @chainsphere/signaling dev",
+    "dev:chain": "pnpm --filter chainsphere-contracts node",
+    "build": "pnpm -r build",
+    "build:web": "pnpm --filter @chainsphere/web build",
+    "test": "pnpm --filter @chainsphere/shared test && pnpm --filter @chainsphere/crypto test && pnpm --filter @chainsphere/ipfs test && pnpm --filter @chainsphere/messaging test && pnpm --filter @chainsphere/web test && pnpm --filter @chainsphere/signaling test && pnpm --filter chainsphere-contracts test",
+    "test:contracts": "pnpm --filter chainsphere-contracts test",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "compile": "pnpm --filter chainsphere-contracts compile",
+    "deploy:local": "pnpm --filter chainsphere-contracts deploy:local",
+    "clean": "rimraf node_modules apps/*/node_modules packages/*/node_modules contracts/node_modules"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "eslint": "^9.9.0",
+    "globals": "^15.9.0",
+    "rimraf": "^5.0.7",
+    "typescript": "^5.5.4",
+    "typescript-eslint": "^8.2.0"
+  }
+}
