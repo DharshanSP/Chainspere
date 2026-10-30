@@ -12,12 +12,25 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { decryptIncomingMessage, encryptDirectMessage, isForUs } from "../services/chat";
+import {
+  decryptIncomingFile,
+  decryptIncomingMessage,
+  encryptDirectFile,
+  encryptDirectMessage,
+  isForUs,
+} from "../services/chat";
 import { anchorConfigured, config, identityRegistryConfigured } from "../services/config";
 import { anchorContract, fetchIdentity, publicKeyFromIdentity } from "../services/contracts";
 import { ChatStore, type Contact, type Conversation, type StoredMessage } from "../stores/chatStore";
 import { loadOrCreateKeyPair, type StoredKeyMaterial } from "../stores/keyStore";
+import { uploadEncryptedPayload } from "../services/ipfs";
 import { useWallet } from "./WalletProvider";
+
+export interface DecryptedFile {
+  name: string;
+  mime: string;
+  url: string;
+}
 
 interface ChatContextValue {
   ready: boolean;
@@ -31,9 +44,11 @@ interface ChatContextValue {
   lastError: string | null;
   /** Plaintext lives in memory only — never persisted. */
   plaintextOf: (messageId: string) => string | undefined;
+  fileDataOf: (messageId: string) => DecryptedFile | undefined;
   addContact: (address: Address, label?: string, publicKeyB64?: string) => Promise<void>;
   removeContact: (address: Address) => void;
   sendText: (peer: Address, plaintext: string) => Promise<void>;
+  sendFile: (peer: Address, file: File) => Promise<void>;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -48,6 +63,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [activePeer, setActivePeer] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [plaintext, setPlaintext] = useState<Record<string, string>>({});
+  const [files, setFiles] = useState<Record<string, DecryptedFile>>({});
 
   const owner = address;
   const storeRef = useRef<ChatStore | null>(null);
@@ -78,6 +94,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setPlaintext((prev) => ({ ...prev, [id]: text }));
   }, []);
 
+  const rememberFile = useCallback((id: string, file: DecryptedFile) => {
+    setFiles((prev) => ({ ...prev, [id]: file }));
+  }, []);
+
   const findConversationOf = useCallback((messageId: string): string | null => {
     if (!store) return null;
     const snap = store.getSnapshot();
@@ -103,14 +123,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       createdAt: envelope.timestamp,
     };
     try {
-      const plain = await decryptIncomingMessage(envelope, keys);
+      if (envelope.contentType === "file") {
+        const fileBytes = await decryptIncomingFile(envelope, keys);
+        const mime = envelope.fileMime || "application/octet-stream";
+        const blob = new Blob([fileBytes as unknown as BlobPart], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const name = envelope.fileName || "attachment";
+        rememberFile(envelope.id, { name, mime, url });
+      } else {
+        const plain = await decryptIncomingMessage(envelope, keys);
+        rememberPlaintext(envelope.id, plain);
+      }
       store.upsertConversation(owner, envelope.from);
       store.addMessage(owner, { ...base, status: "delivered" });
-      rememberPlaintext(envelope.id, plain);
     } catch {
       store.addMessage(owner, { ...base, status: "failed" });
     }
-  }, [keys, owner, store, rememberPlaintext]);
+  }, [keys, owner, store, rememberPlaintext, rememberFile]);
 
   useEffect(() => {
     if (!ready || !owner || !keys) return;
@@ -176,10 +205,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (!signer || !anchorConfigured || !store || !owner) return;
     try {
       store.updateMessage(owner, conversationId, envelope.id, { status: "anchoring" });
+
+      // Off-chain IPFS / Pinata encrypted storage -> outputs immutable CID
+      let cid = "";
+      try {
+        const payloadBytes = new TextEncoder().encode(JSON.stringify(envelope));
+        const res = await uploadEncryptedPayload(payloadBytes, `envelope-${envelope.id}.json`);
+        cid = res.cid;
+      } catch (ipfsErr) {
+        console.warn("IPFS off-chain storage fallback skipped:", ipfsErr);
+      }
+
       const contract = anchorContract(signer, config.messageAnchor);
-      const tx = await contract.anchor(`0x${envelope.id}`, ZeroHash, `0x${envelope.digest}`, "");
+      const tx = await contract.anchor(`0x${envelope.id}`, ZeroHash, `0x${envelope.digest}`, cid);
       await tx.wait();
-      store.updateMessage(owner, conversationId, envelope.id, { status: "anchored", txHash: String(tx.hash) });
+      store.updateMessage(owner, conversationId, envelope.id, {
+        status: "anchored",
+        txHash: String(tx.hash),
+        cid: cid || undefined,
+      });
     } catch (e) {
       store.updateMessage(owner, conversationId, envelope.id, { status: "sent" });
       setLastError(`On-chain anchor failed: ${(e as Error).message}`);
@@ -224,6 +268,53 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     else setLastError("Recipient unreachable — message kept locally as failed.");
   }, [keys, owner, store, resolvePeerPublicKey, rememberPlaintext, anchorMessage]);
 
+  const sendFile = useCallback(async (peer: Address, file: File) => {
+    if (!keys || !owner || !store) throw new Error("Chat is not ready yet");
+    setLastError(null);
+    let peerKey = store.findContact(peer)?.publicKeyB64 ?? null;
+    if (!peerKey) peerKey = await resolvePeerPublicKey(peer);
+    if (!peerKey) {
+      throw new Error("Peer public key unknown — add the contact with their P-256 public key, or register both wallets on-chain.");
+    }
+    const buffer = await file.arrayBuffer();
+    const fileBytes = new Uint8Array(buffer);
+    const envelope = await encryptDirectFile({
+      fileBytes,
+      fileName: file.name,
+      fileMime: file.type || "application/octet-stream",
+      from: owner,
+      to: peer,
+      self: keys,
+      peerPublicKeyB64: peerKey,
+    });
+    const conversationId = peer.toLowerCase();
+    store.upsertConversation(owner, peer);
+    store.addMessage(owner, {
+      id: envelope.id,
+      conversationId,
+      from: owner,
+      envelope,
+      status: "sending",
+      createdAt: envelope.timestamp,
+    });
+    const url = URL.createObjectURL(file);
+    rememberFile(envelope.id, { name: file.name, mime: file.type || "application/octet-stream", url });
+
+    const peers = peersRef.current;
+    const transport = transportRef.current;
+    let delivered = false;
+    if (peers && peers.state(peer) === "connected") {
+      delivered = await peers.sendEnvelope(peer, envelope.id, envelope);
+    }
+    if (!delivered && transport?.connected) {
+      transport.send({ type: "envelope", from: owner, to: peer, room: conversationId, payload: envelope, ts: Date.now() });
+      delivered = true;
+    }
+    store.updateMessage(owner, conversationId, envelope.id, { status: delivered ? "sent" : "failed" });
+    if (delivered) void anchorMessage(conversationId, envelope);
+    else setLastError("Recipient unreachable — message kept locally as failed.");
+  }, [keys, owner, store, resolvePeerPublicKey, rememberFile, anchorMessage]);
+
   const messages = useMemo(
     () => (store && activePeer ? store.messagesFor(activePeer) : []),
     [store, activePeer, snapshot]
@@ -240,10 +331,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     messages,
     lastError,
     plaintextOf: (id) => plaintext[id],
+    fileDataOf: (id) => files[id],
     addContact,
     removeContact,
     sendText,
-  }), [ready, keys, signalingConnected, snapshot, activePeer, messages, lastError, plaintext, addContact, removeContact, sendText]);
+    sendFile,
+  }), [ready, keys, signalingConnected, snapshot, activePeer, messages, lastError, plaintext, files, addContact, removeContact, sendText, sendFile]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 }

@@ -99,6 +99,30 @@ describe("1:1 envelope", () => {
     expect(e1.ciphertext).not.toBe(e2.ciphertext);
     expect(e1.iv).not.toBe(e2.iv);
   });
+
+  it("file envelope encrypt/decrypt roundtrip with file metadata", async () => {
+    const { a, b } = await twoUsers();
+    const fileBytes = new Uint8Array([1, 2, 3, 4, 5, 255, 0, 128]);
+    const env = await encryptEnvelope(fileBytes, {
+      id: newMessageIdHex(),
+      from: "0x1111111111111111111111111111111111111111",
+      to: "0x2222222222222222222222222222222222222222",
+      groupId: null,
+      keyVersion: 1,
+      contentType: "file",
+      fileName: "document.pdf",
+      fileMime: "application/pdf",
+      recipients: [
+        { id: "0x2222222222222222222222222222222222222222", publicKeyB64: b.publicKeyB64 },
+        { id: "0x1111111111111111111111111111111111111111", publicKeyB64: a.publicKeyB64 },
+      ],
+    });
+    expect(env.contentType).toBe("file");
+    expect(env.fileName).toBe("document.pdf");
+    expect(env.fileMime).toBe("application/pdf");
+    const decrypted = await decryptEnvelope(env, "0x2222222222222222222222222222222222222222", b.privateKey);
+    expect(decrypted).toEqual(fileBytes);
+  });
 });
 
 describe("group rotation", () => {

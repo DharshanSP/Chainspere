@@ -5,6 +5,16 @@ Decentralized, privacy-preserving messaging. Messages are end-to-end encrypted i
 fallback, stored optionally on IPFS as ciphertext, and committed on-chain for tamper-evident
 integrity — no server ever sees plaintext, keys, or attachments.
 
+## System Architecture: 5 Core System Blocks
+
+| # | Block | Technology | Responsibility |
+|---|---|---|---|
+| **1** | **Frontend Layer** | React.js + TypeScript UI | Modern user interface, client state management, & Web3 provider connection. |
+| **2** | **Identity Layer** | MetaMask Wallet Provider | Asymmetric key-pair derivation, signature authentication (SIWE), & address identity. |
+| **3** | **Smart Contract Layer** | Solidity Contracts (EVM) | User identity registry, group contract rules, & message proof event logs. |
+| **4** | **Storage Layer** | IPFS Node / Pinata | Stores encrypted message payloads & media files off-chain; outputs immutable CIDs. |
+| **5** | **P2P & Security Layer** | WebRTC + E2E Crypto | Establishes direct client P2P data channels and performs AES-256 client encryption. |
+
 ## Monorepo layout
 
 | Path | Package | Purpose |

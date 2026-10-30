@@ -7,6 +7,8 @@ export const config = {
   messageAnchor: import.meta.env.VITE_MESSAGE_ANCHOR_ADDRESS ?? "",
   ipfsApiUrl: import.meta.env.VITE_IPFS_API_URL ?? "http://127.0.0.1:5001",
   ipfsGatewayUrl: import.meta.env.VITE_IPFS_GATEWAY_URL ?? "https://ipfs.io",
+  pinataJwt: import.meta.env.VITE_PINATA_JWT ?? "",
+  pinataGatewayUrl: import.meta.env.VITE_PINATA_GATEWAY_URL ?? "https://gateway.pinata.cloud",
   signalingUrl: import.meta.env.VITE_SIGNALING_URL ?? "ws://localhost:8081",
   stunServers: (import.meta.env.VITE_STUN_SERVERS ?? "stun:stun.l.google.com:19302")
     .split(",")

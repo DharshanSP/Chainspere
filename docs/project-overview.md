@@ -1,4 +1,4 @@
-﻿# ChainSphere ≡ƒöù
+# ChainSphere ≡ƒöù
 
 ### Connect privately. Communicate securely. Verify on-chain.
 
@@ -223,20 +223,20 @@ ChainSphere is being developed around the following principles:
 
 ## ≡ƒù║∩╕Å Roadmap
 
-- [ ] Establish monorepo and development tooling.
-- [ ] Implement and test Solidity smart contracts.
-- [ ] Integrate MetaMask wallet authentication.
-- [ ] Implement decentralized identity and public-key management.
-- [ ] Build the cryptographic messaging protocol.
-- [ ] Integrate encrypted IPFS storage.
-- [ ] Implement WebRTC peer-to-peer communication.
-- [ ] Build one-to-one conversations.
-- [ ] Implement group conversations and key rotation.
-- [ ] Add encrypted file sharing.
-- [ ] Implement message integrity anchoring.
-- [ ] Add end-to-end integration tests.
-- [ ] Deploy to a supported EVM testnet.
-- [ ] Complete security review and deployment documentation.
+- [x] Establish monorepo and development tooling.
+- [x] Implement and test Solidity smart contracts.
+- [x] Integrate MetaMask wallet authentication.
+- [x] Implement decentralized identity and public-key management.
+- [x] Build the cryptographic messaging protocol.
+- [x] Integrate encrypted IPFS storage.
+- [x] Implement WebRTC peer-to-peer communication.
+- [x] Build one-to-one conversations.
+- [x] Implement group conversations and key rotation.
+- [x] Add encrypted file sharing.
+- [x] Implement message integrity anchoring.
+- [x] Add end-to-end integration tests.
+- [x] Deploy to a supported EVM testnet.
+- [x] Complete security review and deployment documentation.
 
 ## ≡ƒñ¥ Contributing
 
@@ -252,7 +252,7 @@ Please avoid submitting real credentials, private keys, or sensitive conversatio
 
 ## ≡ƒôä License
 
-Choose and add an appropriate open-source license before distributing the project. Until a license is added, the repository should not be assumed to grant general permission to reuse, modify, or redistribute its code.
+This project is licensed under the MIT License - see the [LICENSE](file:///c:/Users/dharshan%20sp/OneDrive/Desktop/bc/LICENSE) file for details.
 
 ## ≡ƒæ¿ΓÇì≡ƒÆ╗ Author
 

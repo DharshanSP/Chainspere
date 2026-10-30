@@ -78,3 +78,58 @@ export class KuboHttpAdapter implements IpfsAdapter {
     throw new Error(`CID unavailable on all gateways: ${errors.join("; ")}`);
   }
 }
+
+/**
+ * Pinata IPFS pinning service adapter (POST https://api.pinata.cloud/pinning/pinFileToIPFS)
+ * + gateway retrieval.
+ * Receives ciphertext bytes only — uploads off-chain and outputs immutable CIDs.
+ */
+export class PinataAdapter implements IpfsAdapter {
+  readonly name = "pinata";
+  constructor(
+    private jwtOrApiKey: string,
+    private gatewayUrl: string = "https://gateway.pinata.cloud",
+    private timeoutMs = 30_000
+  ) {}
+
+  async uploadEncrypted(payload: Uint8Array, opts?: { filename?: string; signal?: AbortSignal }): Promise<UploadResult> {
+    const form = new FormData();
+    form.append("file", new Blob([payload as unknown as BlobPart]), opts?.filename ?? "payload.enc");
+    const headers: Record<string, string> = {};
+    if (this.jwtOrApiKey.startsWith("ey")) {
+      headers["Authorization"] = `Bearer ${this.jwtOrApiKey}`;
+    } else {
+      headers["pinata_api_key"] = this.jwtOrApiKey;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    try {
+      const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+        method: "POST",
+        headers,
+        body: form,
+        signal: opts?.signal ?? ctrl.signal,
+      });
+      if (!res.ok) throw new Error(`Pinata upload failed: HTTP ${res.status}`);
+      const body = await res.json() as { IpfsHash: string };
+      if (!body.IpfsHash) throw new Error("Pinata upload returned no IpfsHash");
+      return { cid: body.IpfsHash, bytes: payload.length, provider: this.name };
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async fetchEncrypted(cid: string, opts?: { signal?: AbortSignal }): Promise<Uint8Array> {
+    const url = `${this.gatewayUrl}/ipfs/${encodeURIComponent(cid)}`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(url, { signal: opts?.signal ?? ctrl.signal });
+      if (!res.ok) throw new Error(`Pinata gateway fetch failed: HTTP ${res.status}`);
+      return new Uint8Array(await res.arrayBuffer());
+    } finally {
+      clearTimeout(t);
+    }
+  }
+}
+

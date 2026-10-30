@@ -10,7 +10,7 @@ import { isValidAddress } from "../lib/address";
 export function ChatsPage({ peer }: { peer?: string }) {
   const { address } = useWallet();
   const {
-    ready, conversations, activePeer, setActivePeer, messages, plaintextOf, sendText, lastError, keys,
+    ready, conversations, activePeer, setActivePeer, messages, plaintextOf, fileDataOf, sendText, sendFile, lastError, keys,
   } = useChat();
 
   useEffect(() => {
@@ -35,9 +35,13 @@ export function ChatsPage({ peer }: { peer?: string }) {
               <h2 className="mono">{active}</h2>
               {keys ? <span className="muted tiny">key v{keys.version} · {keys.fingerprint.slice(0, 12)}…</span> : null}
             </header>
-            <MessageThread messages={messages} self={address} plaintextOf={plaintextOf} />
+            <MessageThread messages={messages} self={address} plaintextOf={plaintextOf} fileDataOf={fileDataOf} />
             {lastError ? <div className="error error-inline">{lastError}</div> : null}
-            <Composer disabled={!ready} onSend={(text) => sendText(active, text)} />
+            <Composer
+              disabled={!ready}
+              onSend={(text) => sendText(active, text)}
+              onSendFile={(file) => sendFile(active, file)}
+            />
           </>
         ) : (
           <div className="empty pane-empty">

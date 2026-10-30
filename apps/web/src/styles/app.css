@@ -194,13 +194,42 @@ body {
 }
 .bubble-mine .bubble { background: #1b2740; border-color: #2c3d63; }
 .bubble-text { white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; }
+.bubble-file { display: flex; flex-direction: column; gap: 0.5rem; }
+.file-header { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; font-size: 0.92rem; }
+.file-icon { font-size: 1.1rem; }
+.file-title { word-break: break-all; }
+.btn-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  color: var(--accent);
+  text-decoration: none;
+  border-radius: 6px;
+  background: var(--bg);
+}
+.btn-download:hover { background: var(--bg-soft); text-decoration: underline; }
 .bubble-meta { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+
+.composer-container { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.composer-attachment-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 1.1rem;
+  background: rgba(91, 140, 255, 0.08);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+.file-badge { font-weight: 500; color: var(--accent); }
+.btn-xs { padding: 0.15rem 0.45rem; font-size: 0.75rem; border-radius: 4px; }
+.composer-attach-btn { font-size: 1.1rem; padding: 0.5rem 0.7rem; border-radius: 10px; }
 
 .composer {
   display: flex;
   gap: 0.6rem;
   padding: 0.9rem 1.1rem;
-  border-top: 1px solid var(--border);
   align-items: flex-end;
 }
 .composer-input {

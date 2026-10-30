@@ -24,6 +24,7 @@ export interface StoredMessage {
   envelope: MessageEnvelope;
   status: MessageStatus;
   txHash?: string;
+  cid?: string;
   createdAt: number;
 }
 

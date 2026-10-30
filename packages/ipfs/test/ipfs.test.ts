@@ -26,4 +26,31 @@ describe("ipfs adapter", () => {
     const a = new InMemoryIpfsAdapter();
     await expect(uploadWithRetry(a, new Uint8Array(0))).rejects.toThrow(/empty/);
   });
+
+  it("PinataAdapter formats request and parses IpfsHash CID", async () => {
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        const urlStr = String(url);
+        if (urlStr.includes("pinFileToIPFS")) {
+          return new Response(JSON.stringify({ IpfsHash: "QmPinataCid12345" }), { status: 200 });
+        }
+        if (urlStr.includes("/ipfs/QmPinataCid12345")) {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        return new Response("Not found", { status: 404 });
+      }) as typeof fetch;
+
+      const { PinataAdapter } = await import("../src/clients/adapters");
+      const pinata = new PinataAdapter("fake-jwt-token");
+      const res = await pinata.uploadEncrypted(new Uint8Array([1, 2, 3]));
+      expect(res.cid).toBe("QmPinataCid12345");
+      expect(res.provider).toBe("pinata");
+
+      const fetched = await pinata.fetchEncrypted("QmPinataCid12345");
+      expect(fetched).toEqual(new Uint8Array([1, 2, 3]));
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });
