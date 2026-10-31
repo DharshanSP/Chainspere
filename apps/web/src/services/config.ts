@@ -6,7 +6,7 @@ function resolveHost(url: string): string {
 }
 
 export const config = {
-  appUrl: import.meta.env.VITE_APP_URL ?? (typeof window !== "undefined" ? window.location.origin : "http://localhost:5173"),
+  appUrl: (typeof window !== "undefined" && window.location.origin) ? window.location.origin : (import.meta.env.VITE_APP_URL ?? "http://localhost:5173"),
   chainId: Number(import.meta.env.VITE_CHAIN_ID ?? 31337),
   rpcUrl: resolveHost(import.meta.env.VITE_LOCAL_RPC_URL ?? "http://127.0.0.1:8545"),
   identityRegistry: import.meta.env.VITE_IDENTITY_REGISTRY_ADDRESS ?? "0x5FbDB2315678afecb367f032d93F642f64180aa3",

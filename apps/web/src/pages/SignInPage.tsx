@@ -3,7 +3,7 @@ import { config } from "../services/config";
 import { SUPPORTED_NETWORKS } from "@chainsphere/shared";
 
 export function SignInPage() {
-  const { status, address, chainId, error, connect, signIn } = useWallet();
+  const { status, address, chainId, error, clearError, connectAndSignIn, signIn, signInAsGuest } = useWallet();
   const networkName = chainId ? SUPPORTED_NETWORKS[chainId] ?? `Chain ${chainId}` : "—";
 
   return (
@@ -27,22 +27,52 @@ export function SignInPage() {
         </ul>
 
         {status === "disconnected" || status === "connecting" ? (
-          <button className="btn btn-primary btn-wide" onClick={() => void connect()} disabled={status === "connecting"}>
-            {status === "connecting" ? "Connecting wallet…" : "Connect wallet"}
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem", width: "100%" }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-wide"
+              onClick={() => void connectAndSignIn()}
+              disabled={status === "connecting"}
+            >
+              {status === "connecting" ? "Connecting wallet…" : "🦊 Connect with MetaMask"}
+            </button>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "0.25rem 0", color: "var(--muted)", fontSize: "0.82rem" }}>
+              <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+              <span>OR</span>
+              <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+            </div>
+
+            <button
+              type="button"
+              className="btn btn-ghost btn-wide"
+              onClick={() => void signInAsGuest()}
+              style={{ border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)" }}
+            >
+              ⚡ Instant Demo Sign-In (No MetaMask needed)
+            </button>
+            <p className="muted tiny" style={{ textAlign: "center" }}>
+              Perfect for testing across two laptops or browsers without installing MetaMask.
+            </p>
+          </div>
         ) : (
-          <>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", width: "100%" }}>
             <div className="signin-address mono">{address}</div>
             <div className="muted small">Network: {networkName} (chainId {chainId})</div>
-            <button className="btn btn-primary btn-wide" onClick={() => void signIn()}>
+            <button type="button" className="btn btn-primary btn-wide" onClick={() => void signIn()}>
               Sign in with message
             </button>
             <p className="muted tiny">
               You will sign a SIWE-style challenge proving wallet ownership. It moves no funds.
             </p>
-          </>
+          </div>
         )}
-        {error ? <div className="error">{error}</div> : null}
+        {error ? (
+          <div className="error" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+            <span>{error}</span>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={clearError}>✕</button>
+          </div>
+        ) : null}
         <div className="muted tiny">
           signaling {config.signalingUrl} · rpc {config.rpcUrl}
         </div>

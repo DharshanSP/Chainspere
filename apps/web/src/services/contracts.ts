@@ -1,4 +1,4 @@
-import { BrowserProvider, Contract, JsonRpcSigner } from "ethers";
+import { Contract, type ContractRunner } from "ethers";
 import type { Address } from "@chainsphere/shared";
 
 const IDENTITY_ABI = [
@@ -31,20 +31,20 @@ export function fingerprintToBytes32(fingerprintHex: string): string {
   return `0x${hex.toLowerCase()}`;
 }
 
-export function identityContract(signer: JsonRpcSigner, address: string): Contract {
+export function identityContract(signer: ContractRunner, address: string): Contract {
   return new Contract(address, IDENTITY_ABI, signer);
 }
 
-export function identityReader(provider: BrowserProvider, address: string): Contract {
+export function identityReader(provider: ContractRunner, address: string): Contract {
   return new Contract(address, IDENTITY_ABI, provider);
 }
 
-export function anchorContract(signer: JsonRpcSigner, address: string): Contract {
+export function anchorContract(signer: ContractRunner, address: string): Contract {
   return new Contract(address, ANCHOR_ABI, signer);
 }
 
 export async function fetchIdentity(
-  provider: BrowserProvider,
+  provider: ContractRunner,
   registryAddress: string,
   wallet: Address
 ): Promise<OnChainIdentity | null> {
@@ -63,7 +63,7 @@ export async function fetchIdentity(
 }
 
 export async function registerIdentity(
-  signer: JsonRpcSigner,
+  signer: ContractRunner,
   registryAddress: string,
   fingerprintHex: string,
   publicKeyB64: string
