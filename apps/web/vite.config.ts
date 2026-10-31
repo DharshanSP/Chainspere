@@ -16,6 +16,9 @@ export default defineConfig({
       "@chainsphere/ipfs": pkg("ipfs/src/index.ts"),
     },
   },
-  server: { port: 5173 },
+  server: {
+    host: true,
+    port: 5173,
+  },
   build: { outDir: "dist", sourcemap: true, chunkSizeWarningLimit: 600 },
 });

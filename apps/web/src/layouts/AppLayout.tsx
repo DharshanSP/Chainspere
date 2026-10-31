@@ -1,4 +1,5 @@
 import { Link, type Route } from "../router";
+import { useState } from "react";
 import { useWallet } from "../providers/WalletProvider";
 import { useChat } from "../providers/ChatProvider";
 import { shortAddress } from "../lib/address";
@@ -17,7 +18,15 @@ function Pill({ label, ok }: { label: string; ok: boolean }) {
 export function AppLayout({ route, children }: { route: Route; children: React.ReactNode }) {
   const { address, chainId, session, signOut } = useWallet();
   const { signalingConnected } = useChat();
+  const [copied, setCopied] = useState(false);
   const network = chainId ? SUPPORTED_NETWORKS[chainId] ?? `Chain ${chainId}` : "—";
+
+  const handleCopyAddress = async () => {
+    if (!address) return;
+    await navigator.clipboard.writeText(address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const navItem = (to: string, label: string, active: boolean) => (
     <Link key={to} to={to} className={`nav-item ${active ? "nav-active" : ""}`}>
@@ -41,7 +50,14 @@ export function AppLayout({ route, children }: { route: Route; children: React.R
           {navItem("/settings", "Settings", route.name === "settings")}
         </nav>
         <div className="sidebar-footer">
-          <div className="muted small">{address ? shortAddress(address) : "not connected"}</div>
+          <div
+            className="muted small mono"
+            style={{ cursor: address ? "pointer" : "default", userSelect: "none" }}
+            title={address ? "Click to copy address" : undefined}
+            onClick={() => void handleCopyAddress()}
+          >
+            {address ? (copied ? "✓ Copied address" : shortAddress(address)) : "not connected"}
+          </div>
           <div className="muted small">{network}</div>
           <div className="row gap">
             <Pill label={signalingConnected ? "signaling" : "offline"} ok={signalingConnected} />

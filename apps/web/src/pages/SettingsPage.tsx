@@ -1,6 +1,5 @@
 import { SUPPORTED_NETWORKS } from "@chainsphere/shared";
 import { useState } from "react";
-import { shortAddress } from "../lib/address";
 import { useChat } from "../providers/ChatProvider";
 import { useWallet } from "../providers/WalletProvider";
 import { config, identityRegistryConfigured, anchorConfigured } from "../services/config";
@@ -12,6 +11,14 @@ export function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [identity, setIdentity] = useState<string | null>(null);
+  const [copiedAddress, setCopiedAddress] = useState(false);
+
+  const copyAddress = async () => {
+    if (!address) return;
+    await navigator.clipboard.writeText(address);
+    setCopiedAddress(true);
+    setTimeout(() => setCopiedAddress(false), 2000);
+  };
 
   const network = chainId ? SUPPORTED_NETWORKS[chainId] ?? `Chain ${chainId}` : "—";
 
@@ -49,7 +56,20 @@ export function SettingsPage() {
       <div className="card">
         <h3>Wallet</h3>
         <dl className="kv">
-          <dt>Address</dt><dd className="mono">{address ? shortAddress(address, 8) : "—"}</dd>
+          <dt>Address</dt>
+          <dd className="row gap">
+            <span className="mono break">{address ?? "—"}</span>
+            {address ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() => void copyAddress()}
+                title="Copy wallet address"
+              >
+                {copiedAddress ? "✓ Copied!" : "📋 Copy"}
+              </button>
+            ) : null}
+          </dd>
           <dt>Network</dt><dd>{network} (chainId {chainId})</dd>
           <dt>Signed in</dt><dd>{session ? new Date(session.issuedAt).toLocaleString() : "no"}</dd>
         </dl>
