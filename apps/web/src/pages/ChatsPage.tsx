@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { Address } from "@chainsphere/shared";
 import { Composer } from "../components/Composer";
 import { ConversationList } from "../components/ConversationList";
@@ -28,14 +28,30 @@ export function ChatsPage({ peer }: { peer?: string }) {
     keys,
   } = useChat();
 
+  const [savedBanner, setSavedBanner] = useState<string | null>(null);
+
   useEffect(() => {
     if (peer && isValidAddress(peer)) setActivePeer(peer.toLowerCase());
   }, [peer, setActivePeer]);
+
+  // Clear "saved" banner when switching conversations
+  useEffect(() => { setSavedBanner(null); }, [activePeer]);
 
   const active = activePeer && isValidAddress(activePeer) ? activePeer : null;
   const isSavedContact = active
     ? contacts.some((c) => c.address.toLowerCase() === active.toLowerCase())
     : false;
+
+  // Check if we received messages from this peer (they initiated)
+  const hasIncomingMessages = active
+    ? messages.some((m) => m.from.toLowerCase() === active.toLowerCase())
+    : false;
+
+  const handleSaveContact = () => {
+    if (!active) return;
+    addContact(active as Address);
+    setSavedBanner(active);
+  };
 
   const handleDeleteActive = () => {
     if (!active || !window.confirm("Delete this conversation and all its messages?")) return;
@@ -71,16 +87,18 @@ export function ChatsPage({ peer }: { peer?: string }) {
               <div className="row gap" style={{ alignItems: "center", flexWrap: "wrap" }}>
                 <h2 className="mono" title={active}>{shortAddress(active, 8)}</h2>
 
-                {!isSavedContact ? (
+                {isSavedContact ? (
+                  <span className="pill pill-ok"><span className="dot" />Saved</span>
+                ) : (
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
-                    onClick={() => addContact(active as Address)}
+                    onClick={handleSaveContact}
                     title="Save this address to contacts"
                   >
                     + Save Contact
                   </button>
-                ) : null}
+                )}
 
                 <button
                   type="button"
@@ -97,6 +115,30 @@ export function ChatsPage({ peer }: { peer?: string }) {
                 </span>
               ) : null}
             </header>
+
+            {/* Banner: unsaved contact who has messaged you */}
+            {!isSavedContact && hasIncomingMessages && savedBanner !== active ? (
+              <div className="new-contact-banner">
+                <div>
+                  <strong>New message from {shortAddress(active)}</strong>
+                  <span className="muted small"> — their encryption key has been received automatically.</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleSaveContact}
+                >
+                  ✓ Save Contact &amp; Reply
+                </button>
+              </div>
+            ) : null}
+
+            {/* Banner: just saved */}
+            {savedBanner === active ? (
+              <div className="saved-contact-banner">
+                ✓ Contact saved! Encryption key pulled automatically — you can now reply.
+              </div>
+            ) : null}
 
             <MessageThread
               messages={messages}
