@@ -12,12 +12,22 @@ export function SettingsPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [identity, setIdentity] = useState<string | null>(null);
   const [copiedAddress, setCopiedAddress] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
 
   const copyAddress = async () => {
     if (!address) return;
     await navigator.clipboard.writeText(address);
     setCopiedAddress(true);
     setTimeout(() => setCopiedAddress(false), 2000);
+  };
+
+  const copyInviteLink = async () => {
+    if (!address) return;
+    const pub = keys?.publicKeyB64 ? `&key=${encodeURIComponent(keys.publicKeyB64)}` : "";
+    const link = `${window.location.origin}${window.location.pathname}#/contacts?add=${address}${pub}&label=Friend`;
+    await navigator.clipboard.writeText(link);
+    setCopiedInvite(true);
+    setTimeout(() => setCopiedInvite(false), 2000);
   };
 
   const network = chainId ? SUPPORTED_NETWORKS[chainId] ?? `Chain ${chainId}` : "—";
@@ -60,14 +70,24 @@ export function SettingsPage() {
           <dd className="row gap">
             <span className="mono break">{address ?? "—"}</span>
             {address ? (
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={() => void copyAddress()}
-                title="Copy wallet address"
-              >
-                {copiedAddress ? "✓ Copied!" : "📋 Copy"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => void copyAddress()}
+                  title="Copy wallet address"
+                >
+                  {copiedAddress ? "✓ Copied Address!" : "📋 Copy Address"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => void copyInviteLink()}
+                  title="Copy shareable invite link with your address and public key"
+                >
+                  {copiedInvite ? "✓ Copied Invite!" : "🔗 Copy Invite Link"}
+                </button>
+              </>
             ) : null}
           </dd>
           <dt>Network</dt><dd>{network} (chainId {chainId})</dd>

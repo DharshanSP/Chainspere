@@ -1,16 +1,17 @@
 import { useEffect } from "react";
+import type { Address } from "@chainsphere/shared";
 import { Composer } from "../components/Composer";
 import { ConversationList } from "../components/ConversationList";
 import { MessageThread } from "../components/MessageThread";
 import { useChat } from "../providers/ChatProvider";
 import { useWallet } from "../providers/WalletProvider";
 import { navigate } from "../router";
-import { isValidAddress } from "../lib/address";
+import { isValidAddress, shortAddress } from "../lib/address";
 
 export function ChatsPage({ peer }: { peer?: string }) {
   const { address } = useWallet();
   const {
-    ready, conversations, activePeer, setActivePeer, messages, plaintextOf, fileDataOf, sendText, sendFile, lastError, keys,
+    ready, conversations, contacts, addContact, activePeer, setActivePeer, messages, plaintextOf, fileDataOf, sendText, sendFile, lastError, keys,
   } = useChat();
 
   useEffect(() => {
@@ -18,6 +19,7 @@ export function ChatsPage({ peer }: { peer?: string }) {
   }, [peer, setActivePeer]);
 
   const active = activePeer && isValidAddress(activePeer) ? activePeer : null;
+  const isSavedContact = active ? contacts.some((c) => c.address.toLowerCase() === active.toLowerCase()) : false;
 
   return (
     <div className="chats">
@@ -32,7 +34,18 @@ export function ChatsPage({ peer }: { peer?: string }) {
         {active && address ? (
           <>
             <header className="pane-header">
-              <h2 className="mono">{active}</h2>
+              <div className="row gap">
+                <h2 className="mono" title={active}>{shortAddress(active, 8)}</h2>
+                {!isSavedContact ? (
+                  <button
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => void addContact(active as Address)}
+                    title="Save this address to your contacts"
+                  >
+                    + Save Contact
+                  </button>
+                ) : null}
+              </div>
               {keys ? <span className="muted tiny">key v{keys.version} · {keys.fingerprint.slice(0, 12)}…</span> : null}
             </header>
             <MessageThread messages={messages} self={address} plaintextOf={plaintextOf} fileDataOf={fileDataOf} />
