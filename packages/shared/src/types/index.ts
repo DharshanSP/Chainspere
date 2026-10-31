@@ -29,6 +29,7 @@ export interface MessageEnvelope {
   fileName?: string;
   fileMime?: string;
   digest: string; // hex SHA-256 over canonical encrypted bytes (integrity)
+  senderPublicKey?: string; // P-256 base64 public key to auto-exchange with recipient
 }
 
 export interface Contact {

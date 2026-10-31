@@ -24,6 +24,7 @@ export const envelopeSchema = z.object({
   fileName: z.string().max(255).optional(),
   fileMime: z.string().max(127).optional(),
   digest: z.string().regex(/^[0-9a-f]{64}$/i, "digest must be sha256 hex"),
+  senderPublicKey: z.string().optional(),
 });
 
 export const signalMessageSchema = z.object({

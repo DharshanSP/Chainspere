@@ -26,7 +26,7 @@ export interface DirectFileInput {
 
 /** Encrypt a 1:1 message for the peer + self (self-wrapped key enables own-history reads). */
 export async function encryptDirectMessage(input: DirectMessageInput): Promise<MessageEnvelope> {
-  return encryptText(input.plaintext, {
+  const env = await encryptText(input.plaintext, {
     id: newMessageIdHex(),
     from: input.from,
     to: input.to,
@@ -39,11 +39,12 @@ export async function encryptDirectMessage(input: DirectMessageInput): Promise<M
       { id: input.from.toLowerCase(), publicKeyB64: input.self.publicKeyB64 },
     ],
   });
+  return { ...env, senderPublicKey: input.self.publicKeyB64 };
 }
 
 /** Encrypt a 1:1 file attachment for the peer + self. */
 export async function encryptDirectFile(input: DirectFileInput): Promise<MessageEnvelope> {
-  return encryptEnvelope(input.fileBytes, {
+  const env = await encryptEnvelope(input.fileBytes, {
     id: newMessageIdHex(),
     from: input.from,
     to: input.to,
@@ -58,6 +59,7 @@ export async function encryptDirectFile(input: DirectFileInput): Promise<Message
       { id: input.from.toLowerCase(), publicKeyB64: input.self.publicKeyB64 },
     ],
   });
+  return { ...env, senderPublicKey: input.self.publicKeyB64 };
 }
 
 /** Decrypt an incoming envelope for the local wallet. Throws when unauthorized/tampered. */
