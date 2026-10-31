@@ -67,7 +67,7 @@ export function ContactsPage() {
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const submitWith = async (targetAddr: string, targetLabel?: string, targetKey?: string) => {
+  const submitWith = (targetAddr: string, targetLabel?: string, targetKey?: string) => {
     setError(null);
     const value = targetAddr.trim();
     if (!isValidAddress(value)) {
@@ -75,18 +75,13 @@ export function ContactsPage() {
       return;
     }
     setBusy(true);
-    try {
-      await addContact(value as Address, targetLabel?.trim() || undefined, targetKey?.trim() || undefined);
-      setAddress("");
-      setLabel("");
-      setPublicKey("");
-      setIncomingInvite(null);
-      navigate(`/chats/${value.toLowerCase()}`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    addContact(value as Address, targetLabel?.trim() || undefined, targetKey?.trim() || undefined);
+    setAddress("");
+    setLabel("");
+    setPublicKey("");
+    setIncomingInvite(null);
+    setBusy(false);
+    navigate(`/chats/${value.toLowerCase()}`);
   };
 
   const submit = () => submitWith(address, label, publicKey);
@@ -112,7 +107,7 @@ export function ContactsPage() {
             <button
               className="btn btn-primary"
               disabled={busy}
-              onClick={() => void submitWith(incomingInvite.address, incomingInvite.label, incomingInvite.key)}
+          onClick={() => submitWith(incomingInvite.address, incomingInvite.label, incomingInvite.key)}
             >
               {busy ? "Connecting…" : "✓ Add & Start Chatting"}
             </button>

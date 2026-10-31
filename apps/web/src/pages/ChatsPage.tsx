@@ -24,6 +24,7 @@ export function ChatsPage({ peer }: { peer?: string }) {
     sendText,
     sendFile,
     lastError,
+    clearError,
     keys,
   } = useChat();
 
@@ -32,66 +33,89 @@ export function ChatsPage({ peer }: { peer?: string }) {
   }, [peer, setActivePeer]);
 
   const active = activePeer && isValidAddress(activePeer) ? activePeer : null;
-  const isSavedContact = active ? contacts.some((c) => c.address.toLowerCase() === active.toLowerCase()) : false;
+  const isSavedContact = active
+    ? contacts.some((c) => c.address.toLowerCase() === active.toLowerCase())
+    : false;
 
-  const handleDeleteActiveChat = () => {
-    if (!active) return;
-    if (window.confirm("Delete this conversation and all its local messages?")) {
-      deleteConversation(active);
-      navigate("/chats");
-    }
+  const handleDeleteActive = () => {
+    if (!active || !window.confirm("Delete this conversation and all its messages?")) return;
+    deleteConversation(active);
+    navigate("/chats");
   };
 
   return (
     <div className="chats">
+      {/* ── Left pane: conversation list ── */}
       <section className="pane pane-list">
         <header className="pane-header">
           <h2>Chats</h2>
-          <button className="btn btn-ghost" onClick={() => navigate("/contacts")}>+ New</button>
+          <button type="button" className="btn btn-ghost" onClick={() => navigate("/contacts")}>
+            + New
+          </button>
         </header>
         <ConversationList
           conversations={conversations}
           activePeer={activePeer}
           onDelete={(id) => {
             deleteConversation(id);
-            if (active && active.toLowerCase() === id.toLowerCase()) {
-              navigate("/chats");
-            }
+            if (active?.toLowerCase() === id.toLowerCase()) navigate("/chats");
           }}
         />
       </section>
+
+      {/* ── Right pane: message thread ── */}
       <section className="pane pane-thread">
         {active && address ? (
           <>
             <header className="pane-header">
-              <div className="row gap" style={{ alignItems: "center" }}>
+              <div className="row gap" style={{ alignItems: "center", flexWrap: "wrap" }}>
                 <h2 className="mono" title={active}>{shortAddress(active, 8)}</h2>
+
                 {!isSavedContact ? (
                   <button
+                    type="button"
                     className="btn btn-ghost btn-xs"
-                    onClick={() => void addContact(active as Address)}
-                    title="Save this address to your contacts"
+                    onClick={() => addContact(active as Address)}
+                    title="Save this address to contacts"
                   >
                     + Save Contact
                   </button>
                 ) : null}
+
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs text-danger"
-                  onClick={handleDeleteActiveChat}
+                  onClick={handleDeleteActive}
                   title="Delete this conversation"
                 >
-                  🗑️ Delete Chat
+                  🗑️ Delete
                 </button>
               </div>
-              {keys ? <span className="muted tiny">key v{keys.version} · {keys.fingerprint.slice(0, 12)}…</span> : null}
+              {keys ? (
+                <span className="muted tiny">
+                  key v{keys.version} · {keys.fingerprint.slice(0, 12)}…
+                </span>
+              ) : null}
             </header>
-            <MessageThread messages={messages} self={address} plaintextOf={plaintextOf} fileDataOf={fileDataOf} />
-            {lastError ? <div className="error error-inline">{lastError}</div> : null}
+
+            <MessageThread
+              messages={messages}
+              self={address}
+              plaintextOf={plaintextOf}
+              fileDataOf={fileDataOf}
+            />
+
+            {lastError ? (
+              <div className="error error-inline" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>{lastError}</span>
+                <button type="button" className="btn btn-ghost btn-xs" onClick={clearError}>✕</button>
+              </div>
+            ) : null}
+
             <Composer
               disabled={!ready}
-              onSend={(text) => sendText(active, text)}
-              onSendFile={(file) => sendFile(active, file)}
+              onSend={(text) => sendText(active as Address, text)}
+              onSendFile={(file) => sendFile(active as Address, file)}
             />
           </>
         ) : (

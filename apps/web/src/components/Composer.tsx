@@ -7,8 +7,8 @@ export function Composer({
   onSendFile,
 }: {
   disabled: boolean;
-  onSend: (text: string) => Promise<void>;
-  onSendFile?: (file: File) => Promise<void>;
+  onSend: (text: string) => Promise<void> | void;
+  onSendFile?: (file: File) => Promise<void> | void;
 }) {
   const [text, setText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);

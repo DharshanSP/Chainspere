@@ -1,7 +1,6 @@
-import { PeerManager, WebSocketTransport } from "@chainsphere/messaging";
+import { WebSocketTransport } from "@chainsphere/messaging";
 import { envelopeSchema } from "@chainsphere/shared";
 import type { Address, MessageEnvelope } from "@chainsphere/shared";
-import { ZeroHash } from "ethers";
 import {
   createContext,
   useCallback,
@@ -19,11 +18,9 @@ import {
   encryptDirectMessage,
   isForUs,
 } from "../services/chat";
-import { anchorConfigured, config, identityRegistryConfigured } from "../services/config";
-import { anchorContract, fetchIdentity, publicKeyFromIdentity } from "../services/contracts";
+import { config } from "../services/config";
 import { ChatStore, type Contact, type Conversation, type StoredMessage } from "../stores/chatStore";
 import { loadOrCreateKeyPair, type StoredKeyMaterial } from "../stores/keyStore";
-import { uploadEncryptedPayload } from "../services/ipfs";
 import { useWallet } from "./WalletProvider";
 
 export interface DecryptedFile {
@@ -42,10 +39,10 @@ interface ChatContextValue {
   setActivePeer: (peer: string | null) => void;
   messages: StoredMessage[];
   lastError: string | null;
-  /** Plaintext lives in memory only — never persisted. */
+  clearError: () => void;
   plaintextOf: (messageId: string) => string | undefined;
   fileDataOf: (messageId: string) => DecryptedFile | undefined;
-  addContact: (address: Address, label?: string, publicKeyB64?: string) => Promise<void>;
+  addContact: (address: Address, label?: string, publicKeyB64?: string) => void;
   removeContact: (address: Address) => void;
   deleteConversation: (conversationId: string) => void;
   sendText: (peer: Address, plaintext: string) => Promise<void>;
@@ -53,11 +50,10 @@ interface ChatContextValue {
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
-
 const emptySnapshot = { contacts: [] as Contact[], conversations: [] as Conversation[], messages: {} };
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const { address, provider, signer, session } = useWallet();
+  const { address, session } = useWallet();
   const [keys, setKeys] = useState<StoredKeyMaterial | null>(null);
   const [ready, setReady] = useState(false);
   const [signalingConnected, setSignalingConnected] = useState(false);
@@ -77,8 +73,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const transportRef = useRef<WebSocketTransport | null>(null);
-  const peersRef = useRef<PeerManager | null>(null);
+  // In-memory cache of peer public keys received via key-exchange frames
+  const peerKeyCache = useRef<Record<string, string>>({});
+  const keysRef = useRef<StoredKeyMaterial | null>(null);
+  keysRef.current = keys;
 
+  // ── Load/create keypair on sign-in ────────────────────────────────────────
   useEffect(() => {
     if (!session || !owner) return;
     let cancelled = false;
@@ -91,6 +91,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, [owner, session]);
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const rememberPlaintext = useCallback((id: string, text: string) => {
     setPlaintext((prev) => ({ ...prev, [id]: text }));
   }, []);
@@ -99,21 +100,42 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setFiles((prev) => ({ ...prev, [id]: file }));
   }, []);
 
-  const findConversationOf = useCallback((messageId: string): string | null => {
-    if (!store) return null;
-    const snap = store.getSnapshot();
-    for (const [conversationId, list] of Object.entries(snap.messages)) {
-      if (list.some((m) => m.id === messageId)) return conversationId;
-    }
-    return null;
+  const getPeerKey = useCallback((peer: string): string | null => {
+    const lc = peer.toLowerCase();
+    if (peerKeyCache.current[lc]) return peerKeyCache.current[lc];
+    return store?.findContact(lc as Address)?.publicKeyB64 ?? null;
   }, [store]);
 
+  // ── Handle incoming signaling frames ──────────────────────────────────────
   const handleIncoming = useCallback(async (payload: unknown) => {
-    if (!keys || !owner || !store) return;
+    const k = keysRef.current;
+    if (!k || !owner || !store) return;
+
+    // Key-exchange frame — peer sends us their public key
+    if (
+      typeof payload === "object" && payload !== null &&
+      (payload as Record<string, unknown>).type === "key-exchange"
+    ) {
+      const kx = payload as { from: string; publicKeyB64: string };
+      if (kx.from && kx.publicKeyB64) {
+        const fromLc = kx.from.toLowerCase();
+        const cleanKey = kx.publicKeyB64.replace(/\s+/g, "+").trim();
+        peerKeyCache.current[fromLc] = cleanKey;
+        // Persist key to contact if already in contacts list
+        const existing = store.findContact(fromLc as Address);
+        if (existing && !existing.publicKeyB64) {
+          store.upsertContact(owner, { ...existing, publicKeyB64: cleanKey });
+        }
+      }
+      return;
+    }
+
+    // Encrypted message envelope
     const parsed = envelopeSchema.safeParse(payload);
     if (!parsed.success) return;
     const envelope = parsed.data as MessageEnvelope;
     if (!isForUs(envelope, owner)) return;
+
     const conversationId = envelope.from.toLowerCase();
     const base: StoredMessage = {
       id: envelope.id,
@@ -123,81 +145,90 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       status: "received",
       createdAt: envelope.timestamp,
     };
+
     try {
       if (envelope.contentType === "file") {
-        const fileBytes = await decryptIncomingFile(envelope, keys);
+        const fileBytes = await decryptIncomingFile(envelope, k);
         const mime = envelope.fileMime || "application/octet-stream";
         const blob = new Blob([fileBytes as unknown as BlobPart], { type: mime });
-        const url = URL.createObjectURL(blob);
-        const name = envelope.fileName || "attachment";
-        rememberFile(envelope.id, { name, mime, url });
+        rememberFile(envelope.id, { name: envelope.fileName || "attachment", mime, url: URL.createObjectURL(blob) });
       } else {
-        const plain = await decryptIncomingMessage(envelope, keys);
-        rememberPlaintext(envelope.id, plain);
+        rememberPlaintext(envelope.id, await decryptIncomingMessage(envelope, k));
       }
       store.upsertConversation(owner, envelope.from);
       store.addMessage(owner, { ...base, status: "delivered" });
-    } catch {
-      store.addMessage(owner, { ...base, status: "failed" });
-    }
-  }, [keys, owner, store, rememberPlaintext, rememberFile]);
 
+      // Automatically reply with our public key so sender can reach us
+      if (transportRef.current?.connected && k.publicKeyB64) {
+        transportRef.current.send({
+          type: "key-exchange" as never,
+          from: owner,
+          to: envelope.from,
+          room: conversationId,
+          payload: { type: "key-exchange", from: owner, publicKeyB64: k.publicKeyB64 },
+          ts: Date.now(),
+        });
+      }
+    } catch (e) {
+      store.addMessage(owner, { ...base, status: "failed" });
+      console.warn("[chat] decrypt error:", e);
+    }
+  }, [owner, store, rememberPlaintext, rememberFile]);
+
+  // ── WebSocket signaling connection ────────────────────────────────────────
   useEffect(() => {
     if (!ready || !owner || !keys) return;
+
     const transport = new WebSocketTransport(config.signalingUrl, owner);
     transportRef.current = transport;
-    const peers = new PeerManager(
-      owner,
-      transport,
-      {
-        onAck: (msgId) => {
-          const conversationId = findConversationOf(msgId);
-          if (conversationId) store?.updateMessage(owner, conversationId, msgId, { status: "delivered" });
-        },
-      },
-      undefined,
-      { iceServers: config.stunServers.map((urls) => ({ urls })) }
-    );
-    peersRef.current = peers;
 
     const offStatus = transport.onStatus(setSignalingConnected);
     const offMsg = transport.onMessage((m) => {
       if (m.type === "envelope") void handleIncoming(m.payload);
+      // Key-exchange frames are sent as envelope payloads with type=key-exchange
+      if (m.type === ("key-exchange" as never)) void handleIncoming(m.payload);
     });
 
     void transport.connect().catch((e) => setLastError((e as Error).message));
-    void peers.start().catch(() => { /* connect errors surface through transport status */ });
 
     return () => {
       offStatus();
       offMsg();
-      peers.stop();
       transport.disconnect();
       transportRef.current = null;
-      peersRef.current = null;
     };
-  }, [ready, owner, keys, handleIncoming, store, findConversationOf]);
+  }, [ready, owner, keys, handleIncoming]);
 
-  const resolvePeerPublicKey = useCallback(async (peer: Address): Promise<string | null> => {
-    if (!provider || !identityRegistryConfigured || !owner) return null;
-    try {
-      const identity = await fetchIdentity(provider, config.identityRegistry, peer);
-      const pub = publicKeyFromIdentity(identity);
-      if (pub) store?.upsertContact(owner, { address: peer, publicKeyB64: pub, addedAt: Date.now() });
-      return pub;
-    } catch {
-      return null;
-    }
-  }, [provider, store, owner]);
-
-  const addContact = useCallback(async (peer: Address, label?: string, publicKeyB64?: string) => {
+  // ── Contact management ────────────────────────────────────────────────────
+  const addContact = useCallback((peer: Address, label?: string, publicKeyB64?: string) => {
     if (!owner || !store) return;
-    const targetPeer = peer.toLowerCase() as Address;
+    const peerLc = peer.toLowerCase() as Address;
     const cleanKey = publicKeyB64 ? publicKeyB64.replace(/\s+/g, "+").trim() : undefined;
-    const resolved = cleanKey ?? (await resolvePeerPublicKey(targetPeer));
-    store.upsertContact(owner, { address: targetPeer, label, publicKeyB64: resolved ?? undefined, addedAt: Date.now() });
-    store.upsertConversation(owner, targetPeer, label);
-  }, [owner, store, resolvePeerPublicKey]);
+
+    // Cache key in memory
+    if (cleanKey) peerKeyCache.current[peerLc] = cleanKey;
+
+    store.upsertContact(owner, {
+      address: peerLc,
+      label,
+      publicKeyB64: cleanKey ?? peerKeyCache.current[peerLc] ?? undefined,
+      addedAt: Date.now(),
+    });
+    store.upsertConversation(owner, peerLc, label);
+
+    // Send them our public key over signaling so they can message us back
+    const transport = transportRef.current;
+    if (transport?.connected && keys?.publicKeyB64) {
+      transport.send({
+        type: "key-exchange" as never,
+        from: owner,
+        to: peerLc,
+        room: peerLc,
+        payload: { type: "key-exchange", from: owner, publicKeyB64: keys.publicKeyB64 },
+        ts: Date.now(),
+      });
+    }
+  }, [owner, store, keys]);
 
   const removeContact = useCallback((peer: Address) => {
     if (!owner || !store) return;
@@ -207,142 +238,89 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const deleteConversation = useCallback((conversationId: string) => {
     if (!owner || !store) return;
     store.deleteConversation(owner, conversationId);
-    if (activePeer && (activePeer.toLowerCase() === conversationId.toLowerCase())) {
-      setActivePeer(null);
-    }
+    if (activePeer?.toLowerCase() === conversationId.toLowerCase()) setActivePeer(null);
   }, [owner, store, activePeer]);
 
-  const anchorMessage = useCallback(async (conversationId: string, envelope: MessageEnvelope) => {
-    if (!signer || !anchorConfigured || !store || !owner) return;
+  // ── Send text ─────────────────────────────────────────────────────────────
+  const sendText = useCallback(async (peer: Address, text: string) => {
+    if (!keys || !owner || !store) { setLastError("Chat not ready yet."); return; }
+    setLastError(null);
+    const peerLc = peer.toLowerCase() as Address;
+    const peerKey = getPeerKey(peerLc);
+    if (!peerKey) {
+      setLastError("Peer's encryption key is not known yet. Make sure they have the app open, or add them using an invite link that includes their public key.");
+      return;
+    }
+    const conversationId = peerLc;
+    let envelope: MessageEnvelope;
     try {
-      store.updateMessage(owner, conversationId, envelope.id, { status: "anchoring" });
-
-      // Off-chain IPFS / Pinata encrypted storage -> outputs immutable CID
-      let cid = "";
-      try {
-        const payloadBytes = new TextEncoder().encode(JSON.stringify(envelope));
-        const res = await uploadEncryptedPayload(payloadBytes, `envelope-${envelope.id}.json`);
-        cid = res.cid;
-      } catch (ipfsErr) {
-        console.warn("IPFS off-chain storage fallback skipped:", ipfsErr);
-      }
-
-      const contract = anchorContract(signer, config.messageAnchor);
-      const tx = await contract.anchor(`0x${envelope.id}`, ZeroHash, `0x${envelope.digest}`, cid);
-      await tx.wait();
-      store.updateMessage(owner, conversationId, envelope.id, {
-        status: "anchored",
-        txHash: String(tx.hash),
-        cid: cid || undefined,
+      envelope = await encryptDirectMessage({
+        plaintext: text,
+        from: owner,
+        to: peerLc,
+        self: keys,
+        peerPublicKeyB64: peerKey.replace(/\s+/g, "+").trim(),
       });
     } catch (e) {
+      setLastError(`Encryption failed: ${(e as Error).message}`);
+      return;
+    }
+    store.upsertConversation(owner, peerLc);
+    store.addMessage(owner, { id: envelope.id, conversationId, from: owner, envelope, status: "sending", createdAt: envelope.timestamp });
+    rememberPlaintext(envelope.id, text);
+
+    const transport = transportRef.current;
+    if (transport?.connected) {
+      transport.send({ type: "envelope", from: owner, to: peerLc, room: conversationId, payload: envelope, ts: Date.now() });
       store.updateMessage(owner, conversationId, envelope.id, { status: "sent" });
-      console.warn("On-chain message anchor skipped or unconfirmed:", e);
-      // We intentionally do not set lastError here so optional anchoring doesn't show a false error banner when P2P delivery succeeded.
+    } else {
+      store.updateMessage(owner, conversationId, envelope.id, { status: "failed" });
+      setLastError("Not connected to signaling server — check your network and ensure the server is running.");
     }
-  }, [signer, store, owner]);
+  }, [keys, owner, store, getPeerKey, rememberPlaintext]);
 
-  const sendText = useCallback(async (peer: Address, plaintext: string) => {
-    if (!keys || !owner || !store) throw new Error("Chat is not ready yet");
-    setLastError(null);
-    try {
-      const targetPeer = peer.toLowerCase() as Address;
-      let peerKey = store.findContact(targetPeer)?.publicKeyB64 ?? null;
-      if (!peerKey) peerKey = await resolvePeerPublicKey(targetPeer);
-      if (!peerKey) {
-        throw new Error("Peer public key unknown — add the contact with their P-256 public key, or register both wallets on-chain.");
-      }
-      peerKey = peerKey.replace(/\s+/g, "+").trim();
-      const envelope = await encryptDirectMessage({
-        plaintext, from: owner, to: targetPeer, self: keys, peerPublicKeyB64: peerKey,
-      });
-      const conversationId = targetPeer.toLowerCase();
-      store.upsertConversation(owner, targetPeer);
-      store.addMessage(owner, {
-        id: envelope.id,
-        conversationId,
-        from: owner,
-        envelope,
-        status: "sending",
-        createdAt: envelope.timestamp,
-      });
-      rememberPlaintext(envelope.id, plaintext);
-
-      const peers = peersRef.current;
-      const transport = transportRef.current;
-      let delivered = false;
-      if (peers && peers.state(targetPeer) === "connected") {
-        delivered = await peers.sendEnvelope(targetPeer, envelope.id, envelope);
-      }
-      if (!delivered && transport?.connected) {
-        transport.send({ type: "envelope", from: owner, to: targetPeer, room: conversationId, payload: envelope, ts: Date.now() });
-        delivered = true;
-      }
-      store.updateMessage(owner, conversationId, envelope.id, { status: delivered ? "sent" : "failed" });
-      if (delivered) void anchorMessage(conversationId, envelope);
-      else setLastError("Recipient unreachable — message kept locally as failed.");
-    } catch (err) {
-      const msg = (err as Error).message || "Failed to send message";
-      setLastError(msg);
-      throw err;
-    }
-  }, [keys, owner, store, resolvePeerPublicKey, rememberPlaintext, anchorMessage]);
-
+  // ── Send file ─────────────────────────────────────────────────────────────
   const sendFile = useCallback(async (peer: Address, file: File) => {
-    if (!keys || !owner || !store) throw new Error("Chat is not ready yet");
+    if (!keys || !owner || !store) { setLastError("Chat not ready yet."); return; }
     setLastError(null);
+    const peerLc = peer.toLowerCase() as Address;
+    const peerKey = getPeerKey(peerLc);
+    if (!peerKey) {
+      setLastError("Peer's encryption key is not known yet. Ask them to open the app first.");
+      return;
+    }
+    const conversationId = peerLc;
+    const buffer = await file.arrayBuffer();
+    let envelope: MessageEnvelope;
     try {
-      const targetPeer = peer.toLowerCase() as Address;
-      let peerKey = store.findContact(targetPeer)?.publicKeyB64 ?? null;
-      if (!peerKey) peerKey = await resolvePeerPublicKey(targetPeer);
-      if (!peerKey) {
-        throw new Error("Peer public key unknown — add the contact with their P-256 public key, or register both wallets on-chain.");
-      }
-      peerKey = peerKey.replace(/\s+/g, "+").trim();
-      const buffer = await file.arrayBuffer();
-      const fileBytes = new Uint8Array(buffer);
-      const envelope = await encryptDirectFile({
-        fileBytes,
+      envelope = await encryptDirectFile({
+        fileBytes: new Uint8Array(buffer),
         fileName: file.name,
         fileMime: file.type || "application/octet-stream",
         from: owner,
-        to: targetPeer,
+        to: peerLc,
         self: keys,
-        peerPublicKeyB64: peerKey,
+        peerPublicKeyB64: peerKey.replace(/\s+/g, "+").trim(),
       });
-      const conversationId = targetPeer.toLowerCase();
-      store.upsertConversation(owner, targetPeer);
-      store.addMessage(owner, {
-        id: envelope.id,
-        conversationId,
-        from: owner,
-        envelope,
-        status: "sending",
-        createdAt: envelope.timestamp,
-      });
-      const url = URL.createObjectURL(file);
-      rememberFile(envelope.id, { name: file.name, mime: file.type || "application/octet-stream", url });
-
-      const peers = peersRef.current;
-      const transport = transportRef.current;
-      let delivered = false;
-      if (peers && peers.state(targetPeer) === "connected") {
-        delivered = await peers.sendEnvelope(targetPeer, envelope.id, envelope);
-      }
-      if (!delivered && transport?.connected) {
-        transport.send({ type: "envelope", from: owner, to: targetPeer, room: conversationId, payload: envelope, ts: Date.now() });
-        delivered = true;
-      }
-      store.updateMessage(owner, conversationId, envelope.id, { status: delivered ? "sent" : "failed" });
-      if (delivered) void anchorMessage(conversationId, envelope);
-      else setLastError("Recipient unreachable — message kept locally as failed.");
-    } catch (err) {
-      const msg = (err as Error).message || "Failed to send file";
-      setLastError(msg);
-      throw err;
+    } catch (e) {
+      setLastError(`Encryption failed: ${(e as Error).message}`);
+      return;
     }
-  }, [keys, owner, store, resolvePeerPublicKey, rememberFile, anchorMessage]);
+    store.upsertConversation(owner, peerLc);
+    store.addMessage(owner, { id: envelope.id, conversationId, from: owner, envelope, status: "sending", createdAt: envelope.timestamp });
+    rememberFile(envelope.id, { name: file.name, mime: file.type || "application/octet-stream", url: URL.createObjectURL(file) });
 
+    const transport = transportRef.current;
+    if (transport?.connected) {
+      transport.send({ type: "envelope", from: owner, to: peerLc, room: conversationId, payload: envelope, ts: Date.now() });
+      store.updateMessage(owner, conversationId, envelope.id, { status: "sent" });
+    } else {
+      store.updateMessage(owner, conversationId, envelope.id, { status: "failed" });
+      setLastError("Not connected to signaling server.");
+    }
+  }, [keys, owner, store, getPeerKey, rememberFile]);
+
+  // ── Derived ───────────────────────────────────────────────────────────────
   const messages = useMemo(
     () => (store && activePeer ? store.messagesFor(activePeer) : []),
     [store, activePeer, snapshot]
@@ -358,6 +336,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setActivePeer,
     messages,
     lastError,
+    clearError: () => setLastError(null),
     plaintextOf: (id) => plaintext[id],
     fileDataOf: (id) => files[id],
     addContact,
