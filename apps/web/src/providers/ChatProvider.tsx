@@ -47,6 +47,7 @@ interface ChatContextValue {
   fileDataOf: (messageId: string) => DecryptedFile | undefined;
   addContact: (address: Address, label?: string, publicKeyB64?: string) => Promise<void>;
   removeContact: (address: Address) => void;
+  deleteConversation: (conversationId: string) => void;
   sendText: (peer: Address, plaintext: string) => Promise<void>;
   sendFile: (peer: Address, file: File) => Promise<void>;
 }
@@ -191,15 +192,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const addContact = useCallback(async (peer: Address, label?: string, publicKeyB64?: string) => {
     if (!owner || !store) return;
-    const resolved = publicKeyB64 ?? (await resolvePeerPublicKey(peer));
-    store.upsertContact(owner, { address: peer, label, publicKeyB64: resolved ?? undefined, addedAt: Date.now() });
-    store.upsertConversation(owner, peer, label);
+    const targetPeer = peer.toLowerCase() as Address;
+    const cleanKey = publicKeyB64 ? publicKeyB64.replace(/\s+/g, "+").trim() : undefined;
+    const resolved = cleanKey ?? (await resolvePeerPublicKey(targetPeer));
+    store.upsertContact(owner, { address: targetPeer, label, publicKeyB64: resolved ?? undefined, addedAt: Date.now() });
+    store.upsertConversation(owner, targetPeer, label);
   }, [owner, store, resolvePeerPublicKey]);
 
   const removeContact = useCallback((peer: Address) => {
     if (!owner || !store) return;
-    store.removeContact(owner, peer);
+    store.removeContact(owner, peer.toLowerCase() as Address);
   }, [owner, store]);
+
+  const deleteConversation = useCallback((conversationId: string) => {
+    if (!owner || !store) return;
+    store.deleteConversation(owner, conversationId);
+    if (activePeer && (activePeer.toLowerCase() === conversationId.toLowerCase())) {
+      setActivePeer(null);
+    }
+  }, [owner, store, activePeer]);
 
   const anchorMessage = useCallback(async (conversationId: string, envelope: MessageEnvelope) => {
     if (!signer || !anchorConfigured || !store || !owner) return;
@@ -226,93 +237,110 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (e) {
       store.updateMessage(owner, conversationId, envelope.id, { status: "sent" });
-      setLastError(`On-chain anchor failed: ${(e as Error).message}`);
+      console.warn("On-chain message anchor skipped or unconfirmed:", e);
+      // We intentionally do not set lastError here so optional anchoring doesn't show a false error banner when P2P delivery succeeded.
     }
   }, [signer, store, owner]);
 
   const sendText = useCallback(async (peer: Address, plaintext: string) => {
     if (!keys || !owner || !store) throw new Error("Chat is not ready yet");
     setLastError(null);
-    let peerKey = store.findContact(peer)?.publicKeyB64 ?? null;
-    if (!peerKey) peerKey = await resolvePeerPublicKey(peer);
-    if (!peerKey) {
-      throw new Error("Peer public key unknown — add the contact with their P-256 public key, or register both wallets on-chain.");
-    }
-    const envelope = await encryptDirectMessage({
-      plaintext, from: owner, to: peer, self: keys, peerPublicKeyB64: peerKey,
-    });
-    const conversationId = peer.toLowerCase();
-    store.upsertConversation(owner, peer);
-    store.addMessage(owner, {
-      id: envelope.id,
-      conversationId,
-      from: owner,
-      envelope,
-      status: "sending",
-      createdAt: envelope.timestamp,
-    });
-    rememberPlaintext(envelope.id, plaintext);
+    try {
+      const targetPeer = peer.toLowerCase() as Address;
+      let peerKey = store.findContact(targetPeer)?.publicKeyB64 ?? null;
+      if (!peerKey) peerKey = await resolvePeerPublicKey(targetPeer);
+      if (!peerKey) {
+        throw new Error("Peer public key unknown — add the contact with their P-256 public key, or register both wallets on-chain.");
+      }
+      peerKey = peerKey.replace(/\s+/g, "+").trim();
+      const envelope = await encryptDirectMessage({
+        plaintext, from: owner, to: targetPeer, self: keys, peerPublicKeyB64: peerKey,
+      });
+      const conversationId = targetPeer.toLowerCase();
+      store.upsertConversation(owner, targetPeer);
+      store.addMessage(owner, {
+        id: envelope.id,
+        conversationId,
+        from: owner,
+        envelope,
+        status: "sending",
+        createdAt: envelope.timestamp,
+      });
+      rememberPlaintext(envelope.id, plaintext);
 
-    const peers = peersRef.current;
-    const transport = transportRef.current;
-    let delivered = false;
-    if (peers && peers.state(peer) === "connected") {
-      delivered = await peers.sendEnvelope(peer, envelope.id, envelope);
+      const peers = peersRef.current;
+      const transport = transportRef.current;
+      let delivered = false;
+      if (peers && peers.state(targetPeer) === "connected") {
+        delivered = await peers.sendEnvelope(targetPeer, envelope.id, envelope);
+      }
+      if (!delivered && transport?.connected) {
+        transport.send({ type: "envelope", from: owner, to: targetPeer, room: conversationId, payload: envelope, ts: Date.now() });
+        delivered = true;
+      }
+      store.updateMessage(owner, conversationId, envelope.id, { status: delivered ? "sent" : "failed" });
+      if (delivered) void anchorMessage(conversationId, envelope);
+      else setLastError("Recipient unreachable — message kept locally as failed.");
+    } catch (err) {
+      const msg = (err as Error).message || "Failed to send message";
+      setLastError(msg);
+      throw err;
     }
-    if (!delivered && transport?.connected) {
-      transport.send({ type: "envelope", from: owner, to: peer, room: conversationId, payload: envelope, ts: Date.now() });
-      delivered = true;
-    }
-    store.updateMessage(owner, conversationId, envelope.id, { status: delivered ? "sent" : "failed" });
-    if (delivered) void anchorMessage(conversationId, envelope);
-    else setLastError("Recipient unreachable — message kept locally as failed.");
   }, [keys, owner, store, resolvePeerPublicKey, rememberPlaintext, anchorMessage]);
 
   const sendFile = useCallback(async (peer: Address, file: File) => {
     if (!keys || !owner || !store) throw new Error("Chat is not ready yet");
     setLastError(null);
-    let peerKey = store.findContact(peer)?.publicKeyB64 ?? null;
-    if (!peerKey) peerKey = await resolvePeerPublicKey(peer);
-    if (!peerKey) {
-      throw new Error("Peer public key unknown — add the contact with their P-256 public key, or register both wallets on-chain.");
-    }
-    const buffer = await file.arrayBuffer();
-    const fileBytes = new Uint8Array(buffer);
-    const envelope = await encryptDirectFile({
-      fileBytes,
-      fileName: file.name,
-      fileMime: file.type || "application/octet-stream",
-      from: owner,
-      to: peer,
-      self: keys,
-      peerPublicKeyB64: peerKey,
-    });
-    const conversationId = peer.toLowerCase();
-    store.upsertConversation(owner, peer);
-    store.addMessage(owner, {
-      id: envelope.id,
-      conversationId,
-      from: owner,
-      envelope,
-      status: "sending",
-      createdAt: envelope.timestamp,
-    });
-    const url = URL.createObjectURL(file);
-    rememberFile(envelope.id, { name: file.name, mime: file.type || "application/octet-stream", url });
+    try {
+      const targetPeer = peer.toLowerCase() as Address;
+      let peerKey = store.findContact(targetPeer)?.publicKeyB64 ?? null;
+      if (!peerKey) peerKey = await resolvePeerPublicKey(targetPeer);
+      if (!peerKey) {
+        throw new Error("Peer public key unknown — add the contact with their P-256 public key, or register both wallets on-chain.");
+      }
+      peerKey = peerKey.replace(/\s+/g, "+").trim();
+      const buffer = await file.arrayBuffer();
+      const fileBytes = new Uint8Array(buffer);
+      const envelope = await encryptDirectFile({
+        fileBytes,
+        fileName: file.name,
+        fileMime: file.type || "application/octet-stream",
+        from: owner,
+        to: targetPeer,
+        self: keys,
+        peerPublicKeyB64: peerKey,
+      });
+      const conversationId = targetPeer.toLowerCase();
+      store.upsertConversation(owner, targetPeer);
+      store.addMessage(owner, {
+        id: envelope.id,
+        conversationId,
+        from: owner,
+        envelope,
+        status: "sending",
+        createdAt: envelope.timestamp,
+      });
+      const url = URL.createObjectURL(file);
+      rememberFile(envelope.id, { name: file.name, mime: file.type || "application/octet-stream", url });
 
-    const peers = peersRef.current;
-    const transport = transportRef.current;
-    let delivered = false;
-    if (peers && peers.state(peer) === "connected") {
-      delivered = await peers.sendEnvelope(peer, envelope.id, envelope);
+      const peers = peersRef.current;
+      const transport = transportRef.current;
+      let delivered = false;
+      if (peers && peers.state(targetPeer) === "connected") {
+        delivered = await peers.sendEnvelope(targetPeer, envelope.id, envelope);
+      }
+      if (!delivered && transport?.connected) {
+        transport.send({ type: "envelope", from: owner, to: targetPeer, room: conversationId, payload: envelope, ts: Date.now() });
+        delivered = true;
+      }
+      store.updateMessage(owner, conversationId, envelope.id, { status: delivered ? "sent" : "failed" });
+      if (delivered) void anchorMessage(conversationId, envelope);
+      else setLastError("Recipient unreachable — message kept locally as failed.");
+    } catch (err) {
+      const msg = (err as Error).message || "Failed to send file";
+      setLastError(msg);
+      throw err;
     }
-    if (!delivered && transport?.connected) {
-      transport.send({ type: "envelope", from: owner, to: peer, room: conversationId, payload: envelope, ts: Date.now() });
-      delivered = true;
-    }
-    store.updateMessage(owner, conversationId, envelope.id, { status: delivered ? "sent" : "failed" });
-    if (delivered) void anchorMessage(conversationId, envelope);
-    else setLastError("Recipient unreachable — message kept locally as failed.");
   }, [keys, owner, store, resolvePeerPublicKey, rememberFile, anchorMessage]);
 
   const messages = useMemo(
@@ -334,9 +362,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     fileDataOf: (id) => files[id],
     addContact,
     removeContact,
+    deleteConversation,
     sendText,
     sendFile,
-  }), [ready, keys, signalingConnected, snapshot, activePeer, messages, lastError, plaintext, files, addContact, removeContact, sendText, sendFile]);
+  }), [ready, keys, signalingConnected, snapshot, activePeer, messages, lastError, plaintext, files, addContact, removeContact, deleteConversation, sendText, sendFile]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 }

@@ -65,38 +65,55 @@ export class ChatStore {
   }
 
   upsertContact(owner: Address, contact: Contact): void {
-    const i = this.snapshot.contacts.findIndex((c) => c.address === contact.address);
-    if (i === -1) this.snapshot.contacts = [contact, ...this.snapshot.contacts];
-    else this.snapshot.contacts = this.snapshot.contacts.map((c, idx) => (idx === i ? { ...c, ...contact } : c));
+    const target = contact.address.toLowerCase();
+    const normalized: Contact = { ...contact, address: target as Address };
+    const filtered = this.snapshot.contacts.filter((c) => c.address.toLowerCase() !== target);
+    this.snapshot.contacts = [normalized, ...filtered];
     this.persist(owner);
     this.commit();
   }
 
   removeContact(owner: Address, address: Address): void {
-    this.snapshot.contacts = this.snapshot.contacts.filter((c) => c.address !== address);
+    const target = address.toLowerCase();
+    this.snapshot.contacts = this.snapshot.contacts.filter((c) => c.address.toLowerCase() !== target);
     this.persist(owner);
     this.commit();
   }
 
   findContact(address: Address): Contact | undefined {
-    return this.snapshot.contacts.find((c) => c.address === address);
+    const target = address.toLowerCase();
+    return this.snapshot.contacts.find((c) => c.address.toLowerCase() === target);
   }
 
   upsertConversation(owner: Address, peer: Address, name?: string): Conversation {
     const id = peer.toLowerCase();
-    const existing = this.snapshot.conversations.find((c) => c.id === id);
+    const existing = this.snapshot.conversations.find((c) => c.id.toLowerCase() === id || c.peer.toLowerCase() === id);
     if (existing) {
       if (name && name !== existing.name) existing.name = name;
-      this.snapshot.conversations = [...this.snapshot.conversations].sort(sortConversations);
+      // Filter any duplicate conversation records
+      const other = this.snapshot.conversations.filter((c) => c.id.toLowerCase() !== id && c.peer.toLowerCase() !== id);
+      this.snapshot.conversations = [existing, ...other].sort(sortConversations);
       this.persist(owner);
       this.commit();
       return existing;
     }
-    const created: Conversation = { id, peer, name: name ?? shortName(peer), lastMessageAt: Date.now() };
-    this.snapshot.conversations = [created, ...this.snapshot.conversations].sort(sortConversations);
+    const created: Conversation = { id, peer: id as Address, name: name ?? shortName(peer), lastMessageAt: Date.now() };
+    const other = this.snapshot.conversations.filter((c) => c.id.toLowerCase() !== id && c.peer.toLowerCase() !== id);
+    this.snapshot.conversations = [created, ...other].sort(sortConversations);
     this.persist(owner);
     this.commit();
     return created;
+  }
+
+  deleteConversation(owner: Address, conversationId: string): void {
+    const id = conversationId.toLowerCase();
+    this.snapshot.conversations = this.snapshot.conversations.filter((c) => c.id.toLowerCase() !== id && c.peer.toLowerCase() !== id);
+    const nextMessages = { ...this.snapshot.messages };
+    delete nextMessages[id];
+    delete nextMessages[conversationId];
+    this.snapshot.messages = nextMessages;
+    this.persist(owner);
+    this.commit();
   }
 
   touchConversation(owner: Address, conversationId: string, at: number): void {
@@ -109,26 +126,28 @@ export class ChatStore {
   }
 
   addMessage(owner: Address, message: StoredMessage): void {
-    const list = this.snapshot.messages[message.conversationId] ?? [];
+    const cid = message.conversationId.toLowerCase();
+    const list = this.snapshot.messages[cid] ?? [];
     if (list.some((m) => m.id === message.id)) return;
-    this.snapshot.messages = { ...this.snapshot.messages, [message.conversationId]: [...list, message] };
-    this.touchConversation(owner, message.conversationId, message.createdAt);
+    this.snapshot.messages = { ...this.snapshot.messages, [cid]: [...list, { ...message, conversationId: cid }] };
+    this.touchConversation(owner, cid, message.createdAt);
     this.persist(owner);
     this.commit();
   }
 
   updateMessage(owner: Address, conversationId: string, id: string, patch: Partial<StoredMessage>): void {
-    const list = this.snapshot.messages[conversationId] ?? [];
+    const cid = conversationId.toLowerCase();
+    const list = this.snapshot.messages[cid] ?? [];
     this.snapshot.messages = {
       ...this.snapshot.messages,
-      [conversationId]: list.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+      [cid]: list.map((m) => (m.id === id ? { ...m, ...patch } : m)),
     };
     this.persist(owner);
     this.commit();
   }
 
   messagesFor(conversationId: string): StoredMessage[] {
-    return [...(this.snapshot.messages[conversationId] ?? [])].sort((a, b) => a.createdAt - b.createdAt);
+    return [...(this.snapshot.messages[conversationId.toLowerCase()] ?? [])].sort((a, b) => a.createdAt - b.createdAt);
   }
 }
 
@@ -141,9 +160,51 @@ function shortName(address: string): string {
 }
 
 function normalize(snap: ChatSnapshot): ChatSnapshot {
-  return {
-    contacts: Array.isArray(snap.contacts) ? snap.contacts : [],
-    conversations: Array.isArray(snap.conversations) ? snap.conversations : [],
-    messages: snap.messages && typeof snap.messages === "object" ? snap.messages : {},
-  };
+  const rawContacts = Array.isArray(snap.contacts) ? snap.contacts : [];
+  const rawConvs = Array.isArray(snap.conversations) ? snap.conversations : [];
+  const rawMsgs = snap.messages && typeof snap.messages === "object" ? snap.messages : {};
+
+  // De-duplicate contacts by address.toLowerCase()
+  const contacts: Contact[] = [];
+  const seenContacts = new Set<string>();
+  for (const c of rawContacts) {
+    if (!c?.address) continue;
+    const addr = c.address.toLowerCase();
+    if (!seenContacts.has(addr)) {
+      seenContacts.add(addr);
+      contacts.push({ ...c, address: addr as Address });
+    }
+  }
+
+  // De-duplicate conversations by id.toLowerCase()
+  const conversations: Conversation[] = [];
+  const seenConvs = new Set<string>();
+  for (const conv of rawConvs) {
+    if (!conv?.id && !conv?.peer) continue;
+    const id = (conv.id || conv.peer).toLowerCase();
+    if (!seenConvs.has(id)) {
+      seenConvs.add(id);
+      conversations.push({ ...conv, id, peer: (conv.peer || id).toLowerCase() as Address });
+    }
+  }
+
+  // Normalize and de-duplicate messages by conversationId and message ID
+  const messages: Record<string, StoredMessage[]> = {};
+  for (const [key, msgList] of Object.entries(rawMsgs)) {
+    const lowerKey = key.toLowerCase();
+    const existing = messages[lowerKey] ?? [];
+    if (Array.isArray(msgList)) {
+      const combined = [...existing];
+      const seenMsgIds = new Set(existing.map((m) => m.id));
+      for (const m of msgList) {
+        if (m?.id && !seenMsgIds.has(m.id)) {
+          seenMsgIds.add(m.id);
+          combined.push({ ...m, conversationId: lowerKey });
+        }
+      }
+      messages[lowerKey] = combined;
+    }
+  }
+
+  return { contacts, conversations, messages };
 }

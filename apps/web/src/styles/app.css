@@ -147,6 +147,31 @@ body {
 .pane-empty, .thread-empty { flex: 1; }
 
 .conversation-list { list-style: none; margin: 0; padding: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; overflow-y: auto; }
+.conversation-item {
+  display: flex;
+  align-items: center;
+  position: relative;
+  border-radius: 10px;
+}
+.conversation-item:hover .btn-delete-chat { opacity: 1; }
+.btn-delete-chat {
+  opacity: 0.35;
+  transition: opacity 0.15s ease;
+  margin-right: 0.35rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  font-size: 0.85rem;
+}
+.btn-delete-chat:hover {
+  opacity: 1;
+  background: rgba(248, 113, 113, 0.2);
+}
+.text-danger { color: #f87171 !important; }
+.text-danger:hover { background: rgba(248, 113, 113, 0.15) !important; }
+
 .conversation {
   width: 100%;
   display: flex;

@@ -5,9 +5,11 @@ import { navigate } from "../router";
 export function ConversationList({
   conversations,
   activePeer,
+  onDelete,
 }: {
   conversations: Conversation[];
   activePeer: string | null;
+  onDelete?: (id: string) => void;
 }) {
   if (conversations.length === 0) {
     return (
@@ -19,8 +21,9 @@ export function ConversationList({
   return (
     <ul className="conversation-list">
       {conversations.map((c) => (
-        <li key={c.id}>
+        <li key={c.id} className="conversation-item">
           <button
+            type="button"
             className={`conversation ${activePeer === c.id ? "conversation-active" : ""}`}
             onClick={() => navigate(`/chats/${c.id}`)}
           >
@@ -33,6 +36,22 @@ export function ConversationList({
               <span className="muted tiny">{new Date(c.lastMessageAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             ) : null}
           </button>
+          {onDelete ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs btn-delete-chat"
+              title="Delete conversation"
+              aria-label="Delete conversation"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm(`Delete chat with ${c.name}? Local messages will be removed.`)) {
+                  onDelete(c.id);
+                }
+              }}
+            >
+              🗑️
+            </button>
+          ) : null}
         </li>
       ))}
     </ul>

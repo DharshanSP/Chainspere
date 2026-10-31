@@ -34,7 +34,9 @@ export function b64encode(bytes: Uint8Array): string {
 }
 
 export function b64decode(s: string): Uint8Array {
-  const bin = atob(s);
+  let clean = s.trim().replace(/-/g, "+").replace(/_/g, "/").replace(/\s+/g, "+");
+  while (clean.length % 4 !== 0) clean += "=";
+  const bin = atob(clean);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;

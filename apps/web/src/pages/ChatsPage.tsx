@@ -11,7 +11,20 @@ import { isValidAddress, shortAddress } from "../lib/address";
 export function ChatsPage({ peer }: { peer?: string }) {
   const { address } = useWallet();
   const {
-    ready, conversations, contacts, addContact, activePeer, setActivePeer, messages, plaintextOf, fileDataOf, sendText, sendFile, lastError, keys,
+    ready,
+    conversations,
+    contacts,
+    addContact,
+    deleteConversation,
+    activePeer,
+    setActivePeer,
+    messages,
+    plaintextOf,
+    fileDataOf,
+    sendText,
+    sendFile,
+    lastError,
+    keys,
   } = useChat();
 
   useEffect(() => {
@@ -21,6 +34,14 @@ export function ChatsPage({ peer }: { peer?: string }) {
   const active = activePeer && isValidAddress(activePeer) ? activePeer : null;
   const isSavedContact = active ? contacts.some((c) => c.address.toLowerCase() === active.toLowerCase()) : false;
 
+  const handleDeleteActiveChat = () => {
+    if (!active) return;
+    if (window.confirm("Delete this conversation and all its local messages?")) {
+      deleteConversation(active);
+      navigate("/chats");
+    }
+  };
+
   return (
     <div className="chats">
       <section className="pane pane-list">
@@ -28,13 +49,22 @@ export function ChatsPage({ peer }: { peer?: string }) {
           <h2>Chats</h2>
           <button className="btn btn-ghost" onClick={() => navigate("/contacts")}>+ New</button>
         </header>
-        <ConversationList conversations={conversations} activePeer={activePeer} />
+        <ConversationList
+          conversations={conversations}
+          activePeer={activePeer}
+          onDelete={(id) => {
+            deleteConversation(id);
+            if (active && active.toLowerCase() === id.toLowerCase()) {
+              navigate("/chats");
+            }
+          }}
+        />
       </section>
       <section className="pane pane-thread">
         {active && address ? (
           <>
             <header className="pane-header">
-              <div className="row gap">
+              <div className="row gap" style={{ alignItems: "center" }}>
                 <h2 className="mono" title={active}>{shortAddress(active, 8)}</h2>
                 {!isSavedContact ? (
                   <button
@@ -45,6 +75,14 @@ export function ChatsPage({ peer }: { peer?: string }) {
                     + Save Contact
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs text-danger"
+                  onClick={handleDeleteActiveChat}
+                  title="Delete this conversation"
+                >
+                  🗑️ Delete Chat
+                </button>
               </div>
               {keys ? <span className="muted tiny">key v{keys.version} · {keys.fingerprint.slice(0, 12)}…</span> : null}
             </header>
