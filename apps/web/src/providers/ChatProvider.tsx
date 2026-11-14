@@ -19,6 +19,7 @@ import {
   isForUs,
 } from "../services/chat";
 import { config } from "../services/config";
+import { fetchIdentity, publicKeyFromIdentity } from "../services/contracts";
 import { ChatStore, type Contact, type Conversation, type StoredMessage } from "../stores/chatStore";
 import { loadOrCreateKeyPair, type StoredKeyMaterial } from "../stores/keyStore";
 import { useWallet } from "./WalletProvider";
@@ -53,19 +54,23 @@ const ChatContext = createContext<ChatContextValue | null>(null);
 const emptySnapshot = { contacts: [] as Contact[], conversations: [] as Conversation[], messages: {} };
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const { address, session } = useWallet();
+  const { address, session, provider } = useWallet();
   const [keys, setKeys] = useState<StoredKeyMaterial | null>(null);
   const [ready, setReady] = useState(false);
   const [signalingConnected, setSignalingConnected] = useState(false);
-  const [activePeer, setActivePeer] = useState<string | null>(null);
+  const [activePeer, setActivePeerState] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [plaintext, setPlaintext] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<Record<string, DecryptedFile>>({});
 
-  const owner = address;
+  const owner = address ? (address.toLowerCase() as Address) : null;
   const storeRef = useRef<ChatStore | null>(null);
   if (owner && storeRef.current === null) storeRef.current = new ChatStore(owner);
   const store = storeRef.current;
+
+  const setActivePeer = useCallback((peer: string | null) => {
+    setActivePeerState(peer ? peer.toLowerCase() : null);
+  }, []);
 
   const snapshot = useSyncExternalStore(
     (cb) => (store ? store.subscribe(cb) : () => {}),
@@ -73,7 +78,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const transportRef = useRef<WebSocketTransport | null>(null);
-  // In-memory cache of peer public keys received via key-exchange frames
+  // In-memory cache of peer public keys received via key-exchange / envelopes / signaling
   const peerKeyCache = useRef<Record<string, string>>({});
   const keysRef = useRef<StoredKeyMaterial | null>(null);
   keysRef.current = keys;
@@ -93,29 +98,96 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const rememberPlaintext = useCallback((id: string, text: string) => {
-    setPlaintext((prev) => ({ ...prev, [id]: text }));
+    setPlaintext((prev) => (prev[id] === text ? prev : { ...prev, [id]: text }));
   }, []);
 
   const rememberFile = useCallback((id: string, file: DecryptedFile) => {
-    setFiles((prev) => ({ ...prev, [id]: file }));
+    setFiles((prev) => (prev[id] ? prev : { ...prev, [id]: file }));
   }, []);
 
   const getPeerKey = useCallback((peer: string): string | null => {
     const lc = peer.toLowerCase();
     if (peerKeyCache.current[lc]) return peerKeyCache.current[lc];
-    return store?.findContact(lc as Address)?.publicKeyB64 ?? null;
+    const contactKey = store?.findContact(lc as Address)?.publicKeyB64;
+    if (contactKey) {
+      peerKeyCache.current[lc] = contactKey;
+      return contactKey;
+    }
+    return null;
   }, [store]);
+
+  const resolvePeerKeyOnChain = useCallback(async (peer: string): Promise<string | null> => {
+    if (!provider || !config.identityRegistry) return null;
+    try {
+      const identity = await fetchIdentity(provider, config.identityRegistry, peer as Address);
+      const key = publicKeyFromIdentity(identity);
+      if (key) {
+        const lc = peer.toLowerCase();
+        peerKeyCache.current[lc] = key;
+        const existing = store?.findContact(lc as Address);
+        if (existing && !existing.publicKeyB64) {
+          store?.upsertContact(owner as Address, { ...existing, publicKeyB64: key });
+        }
+        return key;
+      }
+    } catch {
+      /* on-chain lookup failed, fall through */
+    }
+    return null;
+  }, [provider, config.identityRegistry, owner, store]);
+
+  // ── Auto-decrypt messages for active conversation ─────────────────────────
+  useEffect(() => {
+    if (!keys || !activePeer || !store) return;
+    const currentMessages = store.messagesFor(activePeer);
+    for (const m of currentMessages) {
+      if (m.envelope.contentType === "text" && !plaintext[m.id]) {
+        void decryptIncomingMessage(m.envelope, keys)
+          .then((text) => rememberPlaintext(m.id, text))
+          .catch(() => { /* not decryptable with current key */ });
+      } else if (m.envelope.contentType === "file" && !files[m.id]) {
+        void decryptIncomingFile(m.envelope, keys)
+          .then((fileBytes) => {
+            const mime = m.envelope.fileMime || "application/octet-stream";
+            const blob = new Blob([fileBytes as unknown as BlobPart], { type: mime });
+            rememberFile(m.id, {
+              name: m.envelope.fileName || "attachment",
+              mime,
+              url: URL.createObjectURL(blob),
+            });
+          })
+          .catch(() => { /* not decryptable with current key */ });
+      }
+    }
+  }, [keys, activePeer, store, plaintext, files, rememberPlaintext, rememberFile]);
 
   // ── Handle incoming signaling frames ──────────────────────────────────────
   const handlePresence = useCallback((m: { from: string; payload: unknown }) => {
     const k = keysRef.current;
     if (!k || !owner || !store) return;
-    const p = m.payload as { action?: string; publicKeyB64?: string; from?: string } | null;
+    const p = m.payload as { action?: string; publicKeyB64?: string; publicKey?: string; target?: string; from?: string } | null;
     if (!p || typeof p !== "object") return;
     const sender = m.from.toLowerCase() as Address;
 
-    if (p.publicKeyB64) {
-      const cleanKey = p.publicKeyB64.replace(/\s+/g, "+").trim();
+    // 1. Signaling server key query reply: { action: "key-reply", target, publicKey }
+    if (p.action === "key-reply" && p.target && (p.publicKey || p.publicKeyB64)) {
+      const targetLc = p.target.toLowerCase();
+      const rawKey = p.publicKey || p.publicKeyB64;
+      if (rawKey) {
+        const cleanKey = rawKey.replace(/\s+/g, "+").trim();
+        peerKeyCache.current[targetLc] = cleanKey;
+        const existing = store.findContact(targetLc as Address);
+        if (existing && !existing.publicKeyB64) {
+          store.upsertContact(owner, { ...existing, publicKeyB64: cleanKey });
+        }
+      }
+      return;
+    }
+
+    // 2. Peer key exchange or announcement
+    const rawKey = p.publicKeyB64 || p.publicKey;
+    if (rawKey) {
+      const cleanKey = rawKey.replace(/\s+/g, "+").trim();
       peerKeyCache.current[sender] = cleanKey;
       const existing = store.findContact(sender);
       if (existing) {
@@ -123,7 +195,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // If peer is requesting our public key, send it back immediately
+    // 3. Peer is requesting our public key
     if (p.action === "key-request" && k.publicKeyB64 && transportRef.current?.connected) {
       transportRef.current.send({
         type: "presence",
@@ -175,7 +247,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const blob = new Blob([fileBytes as unknown as BlobPart], { type: mime });
         rememberFile(envelope.id, { name: envelope.fileName || "attachment", mime, url: URL.createObjectURL(blob) });
       } else {
-        rememberPlaintext(envelope.id, await decryptIncomingMessage(envelope, k));
+        const plain = await decryptIncomingMessage(envelope, k);
+        rememberPlaintext(envelope.id, plain);
       }
       store.upsertConversation(owner, envelope.from);
       store.addMessage(owner, { ...base, status: "delivered" });
@@ -201,7 +274,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready || !owner || !keys) return;
 
-    const transport = new WebSocketTransport(config.signalingUrl, owner);
+    const transport = new WebSocketTransport(config.signalingUrl, owner, keys.publicKeyB64);
     transportRef.current = transport;
 
     const offStatus = transport.onStatus(setSignalingConnected);
@@ -226,7 +299,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const peerLc = peer.toLowerCase() as Address;
     const cleanKey = publicKeyB64 ? publicKeyB64.replace(/\s+/g, "+").trim() : undefined;
 
-    // Cache key in memory
     if (cleanKey) peerKeyCache.current[peerLc] = cleanKey;
 
     store.upsertContact(owner, {
@@ -237,17 +309,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
     store.upsertConversation(owner, peerLc, label);
 
-    // Send them our public key over signaling so they can message us back
+    // Send them our public key over signaling & query signaling server for their key
     const transport = transportRef.current;
-    if (transport?.connected && keys?.publicKeyB64) {
-      transport.send({
-        type: "presence",
-        from: owner,
-        to: peerLc,
-        room: peerLc,
-        payload: { action: "key-exchange", from: owner, publicKeyB64: keys.publicKeyB64 },
-        ts: Date.now(),
-      });
+    if (transport?.connected) {
+      if (!cleanKey) transport.queryKey(peerLc);
+      if (keys?.publicKeyB64) {
+        transport.send({
+          type: "presence",
+          from: owner,
+          to: peerLc,
+          room: peerLc,
+          payload: { action: "key-exchange", from: owner, publicKeyB64: keys.publicKeyB64 },
+          ts: Date.now(),
+        });
+      }
     }
   }, [owner, store, keys]);
 
@@ -260,7 +335,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (!owner || !store) return;
     store.deleteConversation(owner, conversationId);
     if (activePeer?.toLowerCase() === conversationId.toLowerCase()) setActivePeer(null);
-  }, [owner, store, activePeer]);
+  }, [owner, store, activePeer, setActivePeer]);
 
   // ── Send text ─────────────────────────────────────────────────────────────
   const sendText = useCallback(async (peer: Address, text: string) => {
@@ -269,29 +344,38 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const peerLc = peer.toLowerCase() as Address;
     let peerKey = getPeerKey(peerLc);
 
-    // If key not yet cached, attempt instant key negotiation over signaling
+    // If key not yet cached, query signaling server & peer
     if (!peerKey) {
-      if (transportRef.current?.connected && keys.publicKeyB64) {
-        transportRef.current.send({
-          type: "presence",
-          from: owner,
-          to: peerLc,
-          room: peerLc,
-          payload: { action: "key-request", from: owner, publicKeyB64: keys.publicKeyB64 },
-          ts: Date.now(),
-        });
+      if (transportRef.current?.connected) {
+        transportRef.current.queryKey(peerLc);
+        if (keys.publicKeyB64) {
+          transportRef.current.send({
+            type: "presence",
+            from: owner,
+            to: peerLc,
+            room: peerLc,
+            payload: { action: "key-request", from: owner, publicKeyB64: keys.publicKeyB64 },
+            ts: Date.now(),
+          });
+        }
       }
-      for (let i = 0; i < 5; i++) {
-        await new Promise((r) => setTimeout(r, 150));
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 100));
         peerKey = getPeerKey(peerLc);
         if (peerKey) break;
       }
     }
 
+    // Fallback: resolve peer key from on-chain IdentityRegistry
     if (!peerKey) {
-      setLastError("Peer encryption key is not known yet. Ask your friend to open ChainSphere, or use an invite link.");
+      peerKey = await resolvePeerKeyOnChain(peerLc);
+    }
+
+    if (!peerKey) {
+      setLastError("Could not retrieve peer's encryption key. Make sure your friend has ChainSphere open, or use an invite link.");
       return;
     }
+
     const conversationId = peerLc;
     let envelope: MessageEnvelope;
     try {
@@ -316,9 +400,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       store.updateMessage(owner, conversationId, envelope.id, { status: "sent" });
     } else {
       store.updateMessage(owner, conversationId, envelope.id, { status: "failed" });
-      setLastError("Not connected to signaling server — check your network and ensure the server is running.");
+      setLastError("Not connected to signaling server — check your connection.");
     }
-  }, [keys, owner, store, getPeerKey, rememberPlaintext]);
+  }, [keys, owner, store, getPeerKey, rememberPlaintext, resolvePeerKeyOnChain]);
 
   // ── Send file ─────────────────────────────────────────────────────────────
   const sendFile = useCallback(async (peer: Address, file: File) => {
@@ -328,27 +412,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     let peerKey = getPeerKey(peerLc);
 
     if (!peerKey) {
-      if (transportRef.current?.connected && keys.publicKeyB64) {
-        transportRef.current.send({
-          type: "presence",
-          from: owner,
-          to: peerLc,
-          room: peerLc,
-          payload: { action: "key-request", from: owner, publicKeyB64: keys.publicKeyB64 },
-          ts: Date.now(),
-        });
+      if (transportRef.current?.connected) {
+        transportRef.current.queryKey(peerLc);
+        if (keys.publicKeyB64) {
+          transportRef.current.send({
+            type: "presence",
+            from: owner,
+            to: peerLc,
+            room: peerLc,
+            payload: { action: "key-request", from: owner, publicKeyB64: keys.publicKeyB64 },
+            ts: Date.now(),
+          });
+        }
       }
-      for (let i = 0; i < 5; i++) {
-        await new Promise((r) => setTimeout(r, 150));
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 100));
         peerKey = getPeerKey(peerLc);
         if (peerKey) break;
       }
     }
 
+    // Fallback: resolve peer key from on-chain IdentityRegistry
     if (!peerKey) {
-      setLastError("Peer encryption key is not known yet. Ask them to open the app first.");
+      peerKey = await resolvePeerKeyOnChain(peerLc);
+    }
+
+    if (!peerKey) {
+      setLastError("Could not retrieve peer's encryption key. Make sure your friend has ChainSphere open, or use an invite link.");
       return;
     }
+
     const conversationId = peerLc;
     const buffer = await file.arrayBuffer();
     let envelope: MessageEnvelope;
@@ -378,7 +471,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       store.updateMessage(owner, conversationId, envelope.id, { status: "failed" });
       setLastError("Not connected to signaling server.");
     }
-  }, [keys, owner, store, getPeerKey, rememberFile]);
+  }, [keys, owner, store, getPeerKey, rememberFile, resolvePeerKeyOnChain]);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const messages = useMemo(
@@ -404,7 +497,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     deleteConversation,
     sendText,
     sendFile,
-  }), [ready, keys, signalingConnected, snapshot, activePeer, messages, lastError, plaintext, files, addContact, removeContact, deleteConversation, sendText, sendFile]);
+  }), [ready, keys, signalingConnected, snapshot, activePeer, messages, lastError, plaintext, files, addContact, removeContact, deleteConversation, sendText, sendFile, setActivePeer]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 }

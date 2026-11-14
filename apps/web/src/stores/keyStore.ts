@@ -25,20 +25,24 @@ interface StoredKeyRecord {
 const storageKey = (address: Address) => `chainsphere.keys.v1.${address.toLowerCase()}`;
 
 /**
- * Per-wallet P-256 encryption keypair, kept in sessionStorage (cleared when the tab closes).
+ * Per-wallet P-256 encryption keypair, kept in localStorage (persistent across tabs and refreshes).
  * The private key never touches the chain, the signaling server, or IPFS.
  */
 export async function loadOrCreateKeyPair(address: Address): Promise<StoredKeyMaterial> {
-  const existing = readJson<StoredKeyRecord | null>(sessionStorage, storageKey(address), null);
+  const existing = readJson<StoredKeyRecord | null>(localStorage, storageKey(address), null);
   if (existing && existing.address.toLowerCase() === address.toLowerCase()) {
-    const privateKey = await importPrivateKeyJwk(existing.privateJwk);
-    return {
-      address: address.toLowerCase() as Address,
-      publicKeyB64: existing.publicKeyB64,
-      fingerprint: existing.fingerprint,
-      version: existing.version,
-      privateKey,
-    };
+    try {
+      const privateKey = await importPrivateKeyJwk(existing.privateJwk);
+      return {
+        address: address.toLowerCase() as Address,
+        publicKeyB64: existing.publicKeyB64,
+        fingerprint: existing.fingerprint,
+        version: existing.version,
+        privateKey,
+      };
+    } catch {
+      /* corrupted key, re-generate below */
+    }
   }
   const pair = await generateEncryptionKeyPair(1);
   const privateJwk = await exportPrivateKeyJwk(pair.privateKey);
@@ -49,7 +53,7 @@ export async function loadOrCreateKeyPair(address: Address): Promise<StoredKeyMa
     fingerprint: pair.fingerprint,
     version: pair.version,
   };
-  writeJson(sessionStorage, storageKey(address), record);
+  writeJson(localStorage, storageKey(address), record);
   return {
     address: address.toLowerCase() as Address,
     publicKeyB64: pair.publicKeyB64,
@@ -60,5 +64,5 @@ export async function loadOrCreateKeyPair(address: Address): Promise<StoredKeyMa
 }
 
 export function clearKeyPair(address: Address): void {
-  removeKey(sessionStorage, storageKey(address));
+  removeKey(localStorage, storageKey(address));
 }

@@ -4,6 +4,7 @@ import { MAX_FRAME_BYTES, RateLimiter, parseFrame, validateMessage } from "../va
 
 export interface SignalingServerOptions {
   port: number;
+  host?: string;
   /** Require an address registration before routing (default true). */
   requireRegister?: boolean;
   log?: (msg: string) => void;
@@ -11,8 +12,8 @@ export interface SignalingServerOptions {
 
 /**
  * WebSocket signaling server.
- * Routes WebRTC setup frames (offer/answer/ice) + presence between registered addresses.
- * Deliberately does NOT store chat plaintext, message history, or encryption keys.
+ * Routes setup frames + presence + public key discovery between registered addresses.
+ * Deliberately does NOT store chat plaintext, message history, or private keys.
  */
 export class SignalingServer {
   private wss: WebSocketServer | null = null;
@@ -24,10 +25,11 @@ export class SignalingServer {
 
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const wss = new WebSocketServer({ port: this.opts.port, maxPayload: MAX_FRAME_BYTES });
+      const host = this.opts.host ?? "0.0.0.0";
+      const wss = new WebSocketServer({ port: this.opts.port, host, maxPayload: MAX_FRAME_BYTES });
       this.wss = wss;
       wss.on("listening", () => {
-        this.opts.log?.(`[signaling] listening on ws://localhost:${this.opts.port}`);
+        this.opts.log?.(`[signaling] listening on ws://${host}:${this.opts.port}`);
         resolve();
       });
       wss.on("error", reject);
@@ -55,21 +57,51 @@ export class SignalingServer {
         const raw = parseFrame(data.toString());
         const msg = validateMessage(raw);
 
-        // Binding: first frame registers the sender's address. Address format checked by schema? — check loose.
+        // Binding: first frame registers the sender's address.
         if (!/^(0x[a-fA-F0-9]{40}|[a-z0-9_-]{3,64})$/.test(msg.from)) throw new Error("Invalid sender address");
         if (!meta.address) {
           meta.address = msg.from.toLowerCase();
-          this.registry.register(meta.address, ws);
+          const pubKey = (msg.payload && typeof msg.payload === "object" && "publicKey" in msg.payload)
+            ? String((msg.payload as { publicKey: unknown }).publicKey)
+            : undefined;
+          this.registry.register(meta.address, ws, pubKey);
           this.opts.log?.(`[signaling] registered ${meta.address}`);
         } else if (meta.address !== msg.from.toLowerCase()) {
           throw new Error("Sender address mismatch after registration");
         }
 
-        // Registration frames (presence with from === to) only bind the address.
-        if (msg.type === "presence" && msg.from.toLowerCase() === msg.to.toLowerCase()) return;
+        // Registration & self query frames (presence with from === to)
+        if (msg.type === "presence" && msg.from.toLowerCase() === msg.to.toLowerCase()) {
+          if (msg.payload && typeof msg.payload === "object") {
+            const p = msg.payload as { action?: string; publicKey?: string; target?: string };
+            if (p.action === "register" && p.publicKey) {
+              this.registry.setPublicKey(meta.address, p.publicKey);
+            } else if (p.action === "get-key" && p.target) {
+              const pubKey = this.registry.getPublicKey(p.target);
+              ws.send(JSON.stringify({
+                type: "presence",
+                from: "signaling",
+                to: meta.address,
+                room: "key-query",
+                payload: { action: "key-reply", target: p.target, publicKey: pubKey },
+                ts: Date.now(),
+              }));
+            } else if (p.action === "get-peers") {
+              const peers = this.registry.getOnlinePeers();
+              ws.send(JSON.stringify({
+                type: "presence",
+                from: "signaling",
+                to: meta.address,
+                room: "peers",
+                payload: { action: "peers", peers },
+                ts: Date.now(),
+              }));
+            }
+          }
+          return;
+        }
 
-        // Route to addressee (no persistence; undeliverable frames are dropped —
-        // senders fall back to IPFS CID delivery for offline peers).
+        // Route to addressee (no persistence; undeliverable frames are dropped)
         const frame = JSON.stringify(msg);
         const delivered = this.registry.route(msg.to, frame);
         if (!delivered && (msg.type === "offer" || msg.type === "answer" || msg.type === "ice")) {

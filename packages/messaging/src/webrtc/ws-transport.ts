@@ -13,10 +13,37 @@ export class WebSocketTransport implements SignalingTransport {
   private _connected = false;
   private closedByUs = false;
 
-  constructor(private url: string, private selfId?: string) {}
+  constructor(private url: string, private selfId?: string, private publicKey?: string) {}
 
   get connected(): boolean {
     return this._connected;
+  }
+
+  setPublicKey(publicKey: string): void {
+    this.publicKey = publicKey;
+    if (this.selfId && this.ws && this.ws.readyState === 1) {
+      this.ws.send(JSON.stringify({
+        type: "presence",
+        from: this.selfId,
+        to: this.selfId,
+        room: "register",
+        payload: { action: "register", publicKey },
+        ts: Date.now(),
+      }));
+    }
+  }
+
+  queryKey(target: string): void {
+    if (this.selfId && this.ws && this.ws.readyState === 1) {
+      this.ws.send(JSON.stringify({
+        type: "presence",
+        from: this.selfId,
+        to: this.selfId,
+        room: "key-query",
+        payload: { action: "get-key", target: target.toLowerCase() },
+        ts: Date.now(),
+      }));
+    }
   }
 
   connect(): Promise<void> {
@@ -29,7 +56,14 @@ export class WebSocketTransport implements SignalingTransport {
           this.statusCbs.forEach((c) => c(true));
           // Bind our address with the signaling server before routing anything.
           if (this.selfId) {
-            ws.send(JSON.stringify({ type: "presence", from: this.selfId, to: this.selfId, room: "register", payload: { action: "register" }, ts: Date.now() }));
+            ws.send(JSON.stringify({
+              type: "presence",
+              from: this.selfId,
+              to: this.selfId,
+              room: "register",
+              payload: { action: "register", publicKey: this.publicKey },
+              ts: Date.now(),
+            }));
           }
           resolve();
         };
