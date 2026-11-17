@@ -3,7 +3,7 @@ import { config } from "../services/config";
 import { SUPPORTED_NETWORKS } from "@chainsphere/shared";
 
 export function SignInPage() {
-  const { status, address, chainId, error, clearError, connectAndSignIn, signIn, signInAsGuest } = useWallet();
+  const { status, address, chainId, error, clearError, connectAndSignIn, signIn } = useWallet();
   const networkName = chainId ? SUPPORTED_NETWORKS[chainId] ?? `Chain ${chainId}` : "—";
 
   return (
@@ -36,24 +36,6 @@ export function SignInPage() {
             >
               {status === "connecting" ? "Connecting wallet…" : "🦊 Connect with MetaMask"}
             </button>
-
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "0.25rem 0", color: "var(--muted)", fontSize: "0.82rem" }}>
-              <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
-              <span>OR</span>
-              <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
-            </div>
-
-            <button
-              type="button"
-              className="btn btn-ghost btn-wide"
-              onClick={() => void signInAsGuest()}
-              style={{ border: "1px solid var(--border)", background: "rgba(255,255,255,0.04)" }}
-            >
-              ⚡ Instant Demo Sign-In (No MetaMask needed)
-            </button>
-            <p className="muted tiny" style={{ textAlign: "center" }}>
-              Perfect for testing across two laptops or browsers without installing MetaMask.
-            </p>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", width: "100%" }}>
