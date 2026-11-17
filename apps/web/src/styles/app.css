@@ -370,3 +370,26 @@ body {
   .span-2 { grid-column: span 1; }
   .kv { grid-template-columns: 1fr; }
 }
+
+/* ---------- pink floating particles ---------- */
+.particles {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.particle {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--pink);
+  opacity: 0.35;
+  filter: blur(1px);
+  animation: float var(--d) ease-in-out infinite;
+}
+@keyframes float {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.35; }
+  50% { transform: translate(var(--tx), var(--ty)) scale(1.4); opacity: 0.55; }
+}
+.layout { position: relative; z-index: 1; }
+.content { position: relative; z-index: 1; }
